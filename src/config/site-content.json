@@ -47,21 +47,14 @@
 			"type": "github",
 			"value": "https://github.com/yysuni",
 			"label": "Github",
-			"order": 3
-		},
-		{
-			"id": "juejin",
-			"type": "juejin",
-			"value": "https://juejin.cn/user/2427311675422382",
-			"label": "稀土掘金",
-			"order": 2
+			"order": 1
 		},
 		{
 			"id": "email",
-			"type": "email",
-			"value": "yysuni1001@gmail.com",
-			"label": "",
-			"order": 1
+			"type": "link",
+			"value": "https://blog.csdn.net/m0_62652820?spm=1000.2115.3001.5343",
+			"label": "CSDN",
+			"order": 2
 		}
 	],
 	"clockShowSeconds": true,
