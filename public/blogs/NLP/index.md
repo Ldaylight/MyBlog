@@ -5990,8 +5990,6 @@ Transformer 的整体架构由**编码器（Encoder）**、**解码器（Decoder
 
 
 
-
-
 **编码器层（Encoder Layer）**包含两个子层：
 
 1、多头自注意力（Multi-Head Self-Attention）
@@ -6383,125 +6381,330 @@ $$
 
 #### 4.2.3.4 示例代码
 
+每个实例，init只执行一回
+
+只有在 `forward` 里需要用到的属性，才需要存成 `self.xxx`
+
+**广播机制的核心规则**
+
+PyTorch 做逐元素运算时，从**最后一维开始**向前对齐，满足以下条件之一即可广播：
+
+- 两个维度**相等**。
+- 其中一个维度是 **1**。
+- 其中一个张量**没有这一维**（自动补 1）。
+
+
+
 代码实现：
 
 ```python
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
+    # 1. 初始化函数.
+    def __init__(self, d_model, dropout, max_len=60):
+        """
+        该函数目的: 初始化参数用的
+        d_model: 词向量维度, 例如; 512
+        dropout: 随机失活概率
+        max_len: 最大句子长度 
+        """
+        # 1. 初始化父类信息.
         super().__init__()
+
+        # 2. 定义dropout层, 防止: 过拟合.
         self.dropout = nn.Dropout(p=dropout)
 
-        # 创建位置编码矩阵 [max_len, d_model]
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # [1, max_len, d_model]
+        # 3. 定义pe(Positional Encoding), 用于保存位置编码结果.
+        pe = torch.zeros(max_len, d_model)  # shape: [60个词, 512维]
+
+        # 4. 定义1个位置列向量, 范围: 0 ~ max_len - 1
+        position = torch.arange(0, max_len).unsqueeze(1)    # shape: [60个词, 1维]
+ 
+        # 5. 定义1个变化矩阵, 本质是: 公式里的 1 / 10000^(2i / d_model)
+        # 10000 ^ (2i / d_model) = e ^ ((2i / d_model) * ln(10000))
+        # 1 / 上述的内容, 所以求倒数: = e ^ ((2i / d_model) * -ln(10000)) -> e ^ (2i * -ln(10000) / d_model)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))  # 形状: [1, 256]
+
+        # 6. 计算三角函数里边的值.
+        # div_term 是一维的 [256]，不是 [1, 256]。 但因为 PyTorch 广播规则，一维张量会被自动当作 [1, 256] 来处理。
+        # position形状: [max_len, 1],   div_term形状: [1, 256],   position * div_term形状: [max_len, 256]
+        position_value = position * div_term
+
+        # 7. 进行pe的赋值, 偶数位置使用 正弦函数(sin)
+        pe[:, 0::2] = torch.sin(position_value)
+        # 8. 进行pe的赋值, 奇数位置使用 余弦函数(cos)
+        pe[:, 1::2] = torch.cos(position_value)
+
+        # 9. 将pe进行升维, 形状: [1, 60, 512]
+        pe = pe.unsqueeze(0)        # 位置编码.
+
+        # 10. 把pe注册到模型的缓冲区, 把位置编码矩阵注册为模型的一部分：它不参与训练，但会随模型自动迁移设备、自动保存到 state_dict
         self.register_buffer('pe', pe)
 
+
+    # 2. 前向传播，只实现位置编码 + 词向量
     def forward(self, x):
-        # x: [batch_size, seq_len, d_model]
-        x = x + self.pe[:, :x.size(1), :]
+        # x: 词向量, 形状: [batch_size, seq_len, d_model] -> [2, 4, 512]
+        # self.pe：预计算好的位置编码，形状 [1, max_len, d_model]
+        # self.pe[:, :x.size(1)]：从 self.pe 中的 max_len 截取前 seq_len 个位置 
+        # 这个代码的核心是: 把 '词向量' 和 '位置编码' 进行相加(融合)
+        x = x + self.pe[:, :x.size(1)]
+        
+        # 随机失活, 不改变形状.
         return self.dropout(x)
+
 ```
 
 **说明**：`register_buffer` 将 `pe` 注册为缓冲区，不参与梯度更新，但会随模型保存和加载。
 
----
+
 
 ## 4.3 编码器部分实现
 
 ### 4.3.1 掩码张量
 
-#### 概念
+**掩码（Mask）**用于在注意力计算中**屏蔽某些位置**，防止模型关注到无效信息。Transformer 中常用两种掩码：
 
-掩码（Mask）用于在注意力计算中屏蔽某些位置，防止模型关注到无效信息。Transformer 中常用两种掩码：
+1. **Padding Mask** 填充掩码：屏蔽填充位置（`<pad>`），使注意力权重不分配给这些位置。
+2. **Causal Mask（Sequence Mask）**因果掩码：在解码器自注意力中，防止当前位置看到未来的词。
 
-1. **Padding Mask**：屏蔽填充位置（`<pad>`），使注意力权重不分配给这些位置。
-2. **Causal Mask（Sequence Mask）**：在解码器自注意力中，防止当前位置看到未来的词。
+
+
+#### 4.3.1.1 Causal Mask 因果掩码
+
+因果掩码确保解码器在生成第 $t$ 个词时只能看到前 $t$ 个位置的词。
+
+该掩码的实现需要使用到上三角矩阵，需要使用到`torch.triu`
+
+对于张量的处理，需要使用到`masked_fill()`，将值为0的位置设置为一个极小的值1e-9
+
+##### 4.3.1.1.1 torch.triu()的使用
+
+`torch.triu` 用于提取矩阵的上三角部分，即保留对角线及其上方的元素，其余位置置零。
+
+api调用： `torch.triu(input, diagonal=0, out=None) `
+
+|     参数名     |            含义             |                        作用                        |
+| :------------: | :-------------------------: | :------------------------------------------------: |
+|  **`input`**   |    输入的张量（Tensor）     |    待处理的矩阵或批量矩阵。必须是至少二维的张量    |
+| **`diagonal`** | 考虑的“对角线”（int，可选） |    控制保留哪条对角线及其上方的元素。默认值 `0`    |
+|   **`out`**    |  输出张量（Tensor，可选）   | 用于存储结果的张量。如果不指定，会返回一个新的张量 |
 
 **代码实现**：
 
 ```python
-def subsequent_mask(size):
-    """生成因果掩码，形状 [1, size, size]，上三角为 0，下三角和对角线为 1"""
-    attn_shape = (1, size, size)
-    mask = torch.triu(torch.ones(attn_shape), diagonal=1).type(torch.uint8)
-    return mask == 0  # 返回布尔张量，True 表示可见
+# 1. 测试 下三角矩阵
+def test_triu(size):
+    # 1. 生成上三角矩阵(初始用 triu()函数来构造即可 )
+    temp = np.triu(m=np.ones((1, size, size)), k=1).astype('uint8')
+    print(f'temp: \n{temp}')
 
-def padding_mask(seq, pad_idx=0):
-    """生成填充掩码，形状 [batch_size, 1, seq_len]"""
-    return (seq != pad_idx).unsqueeze(1)
+    # 2. 将上三角矩阵转换为下三角矩阵.
+    return torch.from_numpy(1 - temp)
+
+
+# 2. 掩码张量的可视化.
+def test_mask():
+    # 第i行代表当前词，第j列做为被看的词，(i, j)的值表示i是否能看见j
+    # 0(黄色): 能看见, 1(紫色)：看不见
+    plt.figure(figsize=(5, 5))
+    plt.imshow(test_triu(size=20)[0])
+    plt.show()
 ```
 
-**说明**：
+掩码张量可视化如下：
 
-- 因果掩码确保解码器在生成第 $t$ 个词时只能看到前 $t$ 个位置。
-- 填充掩码忽略填充位置，避免它们影响注意力计算。
+![image-20260912171951936](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260912171951936.png)
 
-### 4.3.2 注意力机制
 
-#### 概念
 
-注意力机制在 Transformer 中采用缩放点积注意力（Scaled Dot-Product Attention）。
+##### 4.3.1.1.2 masked_fill()的使用
+
+`masked_fill()` 是 PyTorch 中用于**按布尔掩码填充张量元素**的方法，在注意力机制中常用来把“未来位置”的分数变成负无穷，从而在 Softmax 后权重归零。
+
+api实现：
+
+`x.masked_fill(mask, value)`
+`torch.masked_fill(input, mask, value)`
+
+|   参数名    |       类型       |      含义      |                             作用                             |
+| :---------: | :--------------: | :------------: | :----------------------------------------------------------: |
+| **`input`** |     `Tensor`     |    输入张量    |    要被填充的原始张量。函数式调用时必须作为第一个参数传入    |
+| **`mask`**  |   `BoolTensor`   |    布尔掩码    | 形状需能广播到 `input`。**`True` 的位置**会被替换成 `value`，`False` 的位置保持不变 |
+| **`value`** | `float` 或 `int` |     填充值     | 用于替换 `mask` 中为 `True` 的位置。通常设为 `-1e9` 或 `-inf` |
+|   **`x`**   |     `Tensor`     | 调用方法的张量 | 等价于函数式中的 `input`。`x.masked_fill(mask, value)` 中的 `x` 就是被填充的对象 |
+
+
+
+#### 4.3.1.2 Padding Mask
+
+填充掩码忽略填充位置，避免它们影响注意力计算。
+
+
+
+
+
+### 4.3.2 注意力机制  
+
+注意力机制在 Transformer 中采用**缩放点积注意力**，也叫**自注意力机制**
 
 **公式**：
-
 $$
 \text{Attention}(Q, K, V) = \text{softmax}\left(\frac{Q K^\top}{\sqrt{d_k}}\right) V
 $$
 
 其中：
 
-- $Q$：查询矩阵，形状 `[batch, n, d_k]`
-- $K$：键矩阵，形状 `[batch, m, d_k]`
-- $V$：值矩阵，形状 `[batch, m, d_v]`
-- $d_k$：键的维度
+- $Q$：查询矩阵，形状 `[batch_size, seq_len, d_model]`
+- $K$：键矩阵，形状 `[batch_size, seq_len, d_model]`
+- $V$：值矩阵，形状 `[batch_size, seq_len, d_model]`
+- $d_k$：词向量的维度
 
 **代码实现**：
 
-```python
-import torch.nn.functional as F
+这里先令Q = K = V
 
+其中use_position()用的是输入部分写的函数
+
+```python
+# 3. 定义函数, 进行注意力的计算
 def attention(query, key, value, mask=None, dropout=None):
+    """
+    函数功能: 自定义代码, 模拟: 注意力计算.
+    query: 查询张量, 形状通常是:    [batch_size, seq_len, d_model]
+    key: 键张量, 形状通常是:        [batch_size, seq_len, d_model]
+    value: 值张量, 形状通常是:      [batch_size, seq_len, d_model]
+    mask: 掩码张量, 形状一般和 scores匹配.
+    dropout: 随机失活, 防止过拟合.
+    """
+    # 1. 定义查询张量Q的特征维度.
+    # 例如: query的形状是[2, 4, 512] 每批2句话, 每句话有4个单词, 每个单词的维度是512.  d_k = 512 词向量维度
     d_k = query.size(-1)
+
+    # 2. 计算原始注意力分数, 即: Q * K^t / √d_k
+    # key.transpose(-2, -1): 从原来的维度[batch_size, seq_len, d_model] -> [batch_size, d_model, seq_len]
+    # 为什么交换：矩阵乘法要求前一个张量的最后一维 = 后一个张量的倒数第二维。
     scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
+
+    # 3. 掩码处理(可选)
     if mask is not None:
+        # 将scores中, 遮挡的部分, 设置为负无穷(极小值), 这样softmax()后这些位置的权重会接近0(对应: Decoder中'不能看未来位置'的需求)
         scores = scores.masked_fill(mask == 0, -1e9)
-    p_attn = F.softmax(scores, dim=-1)
+
+    # 4. 计算注意力权重.
+    # dim=-1, 在最后1个维度上进行归一化, 让每个query位置的权重总和为 1
+    p_attn = F.softmax(scores, dim=-1) 
+
+    # 5. 随机失活(可选)
     if dropout is not None:
         p_attn = dropout(p_attn)
+
+    # 6. 计算最终的注意力输出: 权重加权求和.
+    # 返回两个结果: 注意力输出(融合信息) 和 注意力权重(用于可视化,调试)
     return torch.matmul(p_attn, value), p_attn
+
+# 4. 测试注意力机制
+def use_attention():
+    # 1. 获取位置编码处理后的结果(词嵌入层结果 + 位置编码结果)
+    position_x = use_position()
+
+    # 2. 因为是自注意力机制, Q,K,V都用同一个张量.
+    query = key = value = position_x
+
+    # 3. 没有掩码, 调用 attention()
+    result1, p_attn = attention(query, key, value) 
+    print(f'result1: {result1.shape}')      # 注意力输出张量的形状: [batch_size, seq_len, d_model] -> [2, 4, 512]
+    print(f'p_attn: {p_attn.shape}')        # 注意力权重张量的形状: [batch_size, seq_len, seq_len] -> [2, 4, 4], 表示每个词对其他词的权重.
+    print(' -.- ' * 10 )
+
+    # 4. 构造1个全0的掩码张量(简单玩儿玩儿, 看看效果即可)
+    mask = torch.zeros(2, 4, 4)
+    # 带掩码, 调用 attention()
+    result2, p_attn = attention(query, key, value, mask)
+    print(f'result2: {result2.shape}')
+    print(f'p_attn: {p_attn.shape}')
+
 ```
 
 ### 4.3.3 多头注意力
 
-#### 概念
+多头注意力（Multi-Head Attention）是 Transformer 中的核心组件，它是对**缩放点积注意力**的扩展。  
 
-多头注意力将 Query、Key、Value 分别通过多个线性变换投影到不同的子空间，然后并行计算注意力，最后拼接并线性变换。
+其基本思想是：将查询（Query）、键（Key）、值（Value）分别通过多个独立的线性变换投影到不同的子空间，在每个子空间中并行地计算注意力，最后将所有子空间的结果拼接并再次线性变换，得到最终输出。
 
-**公式**：
+**作用：**
+
+1. **捕捉多方面的信息**：不同的注意力头可以关注输入序列的不同方面，例如语法关系、语义关系、位置关系等。
+2. **增强表达能力**：通过多个子空间的并行计算，模型能够同时从多个角度理解输入。
+3. **稳定训练**：多头机制类似于集成学习，可以减少单一注意力头的噪声，提高模型的鲁棒性。
+
+4. **并行计算**：所有头可以并行计算，充分利用 GPU 的并行能力。
+
+ 
+
+#### 4.3.3.1 多头注意力的推导
+
+![img](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typora07d0d2e9-ee4d-4752-a0f0-345eaaf98c50.png)
+
+假设模型维度为 $d_{model}$，注意力头数为 $h$，则每个头的维度为 $d_k = d_v = d_{model} / h$。
+
+计算过程如下：
+
+1. **线性投影**：对 Query、Key、Value 分别使用 $h$ 组独立的线性变换，得到每个头的 $Q_i, K_i, V_i$：
+   $$
+   Q_i = Q W_i^Q, \quad K_i = K W_i^K, \quad V_i = V W_i^V
+   $$
+   其中 $W_i^Q \in \mathbb{R}^{d_{model} \times d_k}$，$W_i^K \in \mathbb{R}^{d_{model} \times d_k}$，$W_i^V \in \mathbb{R}^{d_{model} \times d_v}$。
+
+2. **并行计算注意力**：对每个头分别计算缩放点积注 意力：
+   $$
+   \text{head}_i = \text{Attention}(Q_i, K_i, V_i) = \text{softmax}\left(\frac{Q_i K_i^\top}{\sqrt{d_k}}\right) V_i
+   $$
+
+3. **拼接**：将所有头的输出在特征维度上**拼接**：
+   $$
+   \text{Concat} = [\text{head}_1; \text{head}_2; \dots; \text{head}_h] \in \mathbb{R}^{n \times d_{model}}
+   $$
+
+4. **最终线性变换**：通过一个线性层 $W^O \in \mathbb{R}^{d_{model} \times d_{model}}$ 得到最终输出：
+   $$
+   \text{MultiHead}(Q, K, V) = \text{Concat} \cdot W^O
+   $$
+
+综合上述步骤，多头注意力的公式为：
 
 $$
 \text{MultiHead}(Q, K, V) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W^O
 $$
 
+其中：
+
 $$
 \text{head}_i = \text{Attention}(Q W_i^Q, K W_i^K, V W_i^V)
 $$
 
+**变量说明表：**
+
+QKV实际上有批次维度，这里为了公式推导简洁，省略了批次维度
+
+|     变量名      |           含义            |                             作用                             |
+| :-------------: | :-----------------------: | :----------------------------------------------------------: |
+|       $Q$       |         查询矩阵          |      表示当前需要关注的目标信息，形状 $[n, d_{model}]$       |
+|       $K$       |          键矩阵           |   表示输入序列中每个位置的索引信息，形状 $[m, d_{model}]$    |
+|       $V$       |          值矩阵           |   表示输入序列中每个位置的实际信息，形状 $[m, d_{model}]$    |
+|     $W_i^Q$     | 第 $i$ 个头的查询权重矩阵 |    将 $Q$ 投影到第 $i$ 个子空间，形状 $[d_{model}, d_k]$     |
+|     $W_i^K$     |  第 $i$ 个头的键权重矩阵  |    将 $K$ 投影到第 $i$ 个子空间，形状 $[d_{model}, d_k]$     |
+|     $W_i^V$     |  第 $i$ 个头的值权重矩阵  |    将 $V$ 投影到第 $i$ 个子空间，形状 $[d_{model}, d_v]$     |
+|      $W^O$      |       输出权重矩阵        | 将拼接后的多头输出映射回模型维度，形状 $[d_{model}, d_{model}]$ |
+|       $h$       |        注意力头数         |                     决定并行子空间的数量                     |
+|      $d_k$      |      每个头的键维度       |                  通常 $d_k = d_{model} / h$                  |
+|      $d_v$      |      每个头的值维度       |                  通常 $d_v = d_{model} / h$                  |
+|   $d_{model}$   |         模型维度          |                     输入和输出的特征维度                     |
+|       $n$       |       查询序列长度        |                          查询的数量                          |
+|       $m$       |      键值对序列长度       |                         键和值的数量                         |
+| $\text{head}_i$ |  第 $i$ 个头的注意力输出  |                       形状 $[n, d_v]$                        |
+| $\text{Concat}$ |         拼接操作          |                 将所有头的输出在特征维度拼接                 |
+
 **PyTorch API**：`torch.nn.MultiheadAttention`
-
-**常用参数表**：
-
-| 参数名        | 含义         | 作用                                          |
-| ------------- | ------------ | --------------------------------------------- |
-| `embed_dim`   | 模型维度     | 输入和输出的特征维度                          |
-| `num_heads`   | 注意力头数   | 将模型维度分成多少个头                        |
-| `dropout`     | Dropout 概率 | 注意力权重的 dropout                          |
-| `batch_first` | 批次优先     | 若为 True，输入形状为 `(batch, seq, feature)` |
-| `bias`        | 是否使用偏置 | 线性层是否包含偏置                            |
 
 **代码实现**：
 
@@ -6807,16 +7010,16 @@ PyTorch 提供了内置的 Transformer 模块 `torch.nn.Transformer`，可以直
 
 **常用参数表**：
 
-| 参数名               | 含义         | 作用                                          |
-| -------------------- | ------------ | --------------------------------------------- |
-| `d_model`            | 模型维度     | 输入输出的特征维度                            |
-| `nhead`              | 注意力头数   | 多头注意力的头数                              |
-| `num_encoder_layers` | 编码器层数   | 编码器堆叠层数                                |
-| `num_decoder_layers` | 解码器层数   | 解码器堆叠层数                                |
-| `dim_feedforward`    | 前馈网络维度 | 前馈网络的隐藏层维度                          |
-| `dropout`            | Dropout 概率 | 默认 0.1                                      |
-| `activation`         | 激活函数     | 默认 relu，可选 gelu                          |
-| `batch_first`        | 批次优先     | 若为 True，输入形状为 `(batch, seq, feature)` |
+|        参数名        |     含义     |                     作用                      |
+| :------------------: | :----------: | :-------------------------------------------: |
+|      `d_model`       |   模型维度   |              输入输出的特征维度               |
+|       `nhead`        |  注意力头数  |               多头注意力的头数                |
+| `num_encoder_layers` |  编码器层数  |                编码器堆叠层数                 |
+| `num_decoder_layers` |  解码器层数  |                解码器堆叠层数                 |
+|  `dim_feedforward`   | 前馈网络维度 |             前馈网络的隐藏层维度              |
+|      `dropout`       | Dropout 概率 |                   默认 0.1                    |
+|     `activation`     |   激活函数   |             默认 relu，可选 gelu              |
+|    `batch_first`     |   批次优先   | 若为 True，输入形状为 `(batch, seq, feature)` |
 
 **示例**：
 
@@ -6897,6 +7100,111 @@ Transformer 是现代 NLP 的基石，其核心组件包括：
 
 
 
+
+## 四、代码实现
+
+### 4.1 手动实现多头注意力（PyTorch）
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, num_heads, dropout=0.1):
+        super().__init__()
+        assert d_model % num_heads == 0, "d_model 必须能被 num_heads 整除"
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        # 定义线性变换层
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, query, key, value, mask=None):
+        batch_size = query.size(0)
+
+        # 1. 线性变换并分头
+        # 输入形状: [batch, seq_len, d_model]
+        Q = self.W_q(query)  # [batch, n, d_model]
+        K = self.W_k(key)    # [batch, m, d_model]
+        V = self.W_v(value)  # [batch, m, d_model]
+
+        # 重塑为 [batch, num_heads, seq_len, d_k]
+        Q = Q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        K = K.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+        V = V.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
+
+        # 2. 计算缩放点积注意力
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        context = torch.matmul(attn_weights, V)  # [batch, num_heads, n, d_k]
+
+        # 3. 拼接多头
+        context = context.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
+
+        # 4. 最终线性变换
+        output = self.W_o(context)
+        return output, attn_weights
+```
+
+### 4.2 使用 PyTorch 内置的 `nn.MultiheadAttention`
+
+```python
+import torch
+import torch.nn as nn
+
+# 定义参数
+d_model = 512
+num_heads = 8
+batch_size = 4
+seq_len = 10
+
+# 创建多头注意力模块
+mha = nn.MultiheadAttention(embed_dim=d_model, num_heads=num_heads, batch_first=True)
+
+# 随机输入
+query = torch.randn(batch_size, seq_len, d_model)
+key = torch.randn(batch_size, seq_len, d_model)
+value = torch.randn(batch_size, seq_len, d_model)
+
+# 前向传播
+output, attn_weights = mha(query, key, value)
+print(output.shape)      # torch.Size([4, 10, 512])
+print(attn_weights.shape) # torch.Size([4, 10, 10])
+```
+
+### 4.3 `nn.MultiheadAttention` 常用参数表
+
+| 参数名          | 含义                  | 作用                                                         |
+| --------------- | --------------------- | ------------------------------------------------------------ |
+| `embed_dim`     | 模型维度              | 输入和输出的特征维度，必须等于 d_model                       |
+| `num_heads`     | 注意力头数            | 将模型维度分成多少个并行头                                   |
+| `dropout`       | Dropout 概率          | 应用于注意力权重的 dropout，默认 0.0                         |
+| `bias`          | 是否使用偏置          | 线性层是否包含偏置，默认 True                                |
+| `batch_first`   | 批次优先              | 若为 True，输入形状为 `(batch, seq, feature)`，否则为 `(seq, batch, feature)` |
+| `add_bias_kv`   | 是否添加偏置到 K 和 V | 默认 False                                                   |
+| `add_zero_attn` | 是否添加零注意力      | 默认 False                                                   |
+| `kdim`          | 键的特征维度          | 默认为 `embed_dim`                                           |
+| `vdim`          | 值的特征维度          | 默认为 `embed_dim`                                           |
+
+## 五、总结
+
+- **多头注意力**通过多个独立的线性投影，将 Q、K、V 映射到不同的子空间，并行计算注意力，最后拼接并融合。
+- **作用**：捕捉多方面的信息，增强模型表达能力，稳定训练，支持并行计算。
+- **核心公式**：$\text{MultiHead}(Q, K, V) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W^O$，其中 $\text{head}_i = \text{Attention}(Q W_i^Q, K W_i^K, V W_i^V)$。
+- **实现**：可以手动实现，也可以直接使用 PyTorch 的 `nn.MultiheadAttention`。
+- **参数**：`embed_dim`、`num_heads`、`dropout`、`batch_first` 等是关键配置。
+
+多头注意力是 Transformer 成功的关键之一，它使模型能够同时从多个角度理解序列信息，为后续的预训练语言模型奠定了基础。
 
 
 
