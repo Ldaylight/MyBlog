@@ -6706,457 +6706,107 @@ QKV实际上有批次维度，这里为了公式推导简洁，省略了批次�
 
 **PyTorch API**：`torch.nn.MultiheadAttention`
 
-**代码实现**：
+#### 4.3.3.2 代码实现
+
+**代码实现1**：
 
 ```python
-import copy
-import torch.nn as nn
-
-class MultiHeadedAttention(nn.Module):
-    def __init__(self, h, d_model, dropout=0.1):
+# 6. 定义函数, 实现多头注意力机制 -> 核心: 把词向量维度分成N个头, 并行计算'小维度'的注意力, 增强模型表达能力.
+class MultiHeadAttention(nn.Module):
+    # 1. 参数初始化.
+    # 参1: 词向量维度(例如: 512), 参2: 多头数量(例如: 8), 参3: 随机失活概率(例如: 0.1)
+    def __init__(self, embed_dim, head, dropout_p=0.1):
+        # 1. 初始化父类成员.
         super().__init__()
-        assert d_model % h == 0
-        self.d_k = d_model // h
-        self.h = h
-        self.linears = nn.ModuleList([copy.deepcopy(nn.Linear(d_model, d_model)) for _ in range(4)])
-        self.dropout = nn.Dropout(p=dropout)
 
+        # 2. 分头动作, 确保能整除   只有条件成立, 代码才会继续向下执行.
+        assert embed_dim % head == 0
+
+        # 3. 计算每个头的词嵌入维度.
+        self.d_k = embed_dim // head        # 512 // 8 = 64
+        self.head = head                    # 8
+
+        # 4. 定义4个线性层, 前3个负责: Q,K,V的投影(映射), 最后1个负责: 用于输出(多头注意力机制)的结果.
+        self.linears = clones(nn.Linear(embed_dim, embed_dim), 4)
+
+        # 5. 定义随机失活层.
+        self.dropout = nn.Dropout(p=dropout_p)
+        # 6. 保存注意力权重, 用于可视化 或者 分析.
+        self.attn = None
+
+
+    # 2. 前向传播 -> 实现多头注意力计算流程.
     def forward(self, query, key, value, mask=None):
+        # 1. 判断是否要掩码.
+        # Q, K, V的形状: [batch_size, seq_len, d_model], 例如: [2, 4, 512]
+        # mask的形状:    [batch_size, seq_len, seq_len], 例如: [1, 4, 4]
         if mask is not None:
-            mask = mask.unsqueeze(1)
-        nbatches = query.size(0)
+            mask = mask.unsqueeze(0)
 
-        # 1. 线性变换并分头: [batch, seq, d_model] -> [batch, h, seq, d_k]
+        # 2. 获取batch_size的批量大小,
+        self.batch = query.size(0)
+
+        # 3. 线性变换: Q, K, V -> 多头注意力计算.
+        # mode(x):          通过线性层 将输入映射到 embed_dim的维度, 即: 512
+        # view(...):        把输入张量转成 [batch_size, seq_len, head, d_k] -> [2, 4, 8, 64]   ==> [batch_size, head, seq_len, d_k] -> [2, 8, 4, 64]
+        # transpose(1, 2):   把 [batch_size, seq_len, head, d_k] -> [batch_size, head, seq_len, d_k]
+        # zip()把多个可迭代对象“按位置配对”
         query, key, value = [
-            lin(x).view(nbatches, -1, self.h, self.d_k).transpose(1, 2)
-            for lin, x in zip(self.linears, (query, key, value))
+            model(x).view(self.batch, -1, self.head, self.d_k).transpose(1, 2)
+            for model, x in zip(self.linears, (query, key, value))
         ]
 
-        # 2. 计算注意力
-        x, self.attn = attention(query, key, value, mask=mask, dropout=self.dropout)
+        # 4. 多头注意力计算
+        # x的形状(注意力输出):      [batch_size, head, seq_len, d_k] -> [2, 8, 4, 64]
+        # self.att(注意力权重):    [batch_size, head, seq_len, seq_len] -> [2, 8, 4, 4]
+        x, self.attn = attention(query, key, value, mask, self.dropout)
 
-        # 3. 拼接并线性变换
-        x = x.transpose(1, 2).contiguous().view(nbatches, -1, self.h * self.d_k)
-        return self.linears[-1](x)
+        # 5. 将多头注意力结果 -> 合并.
+        # 例如: [2, 8, 4, 64] -> [2, 4, 8, 64] -> [2, 4, 512]
+        # 作用：把张量在内存中变成连续存储  交换维度后，张量在内存中变得不连续
+        attn_x= x.transpose(1, 2).contiguous().view(self.batch, -1, self.head * self.d_k)
+
+        # 6. 通过最后1个线性层处理, 返回结果.
+        return self.linears[-1](attn_x)
+
+# 7. 测试多头注意力机制.
+def use_multihead():
+    # 1. 创建多头注意力层 对象.
+    my_attention = MultiHeadAttention(512, 8)
+    # 2. 获取位置编码处理后的结果(词嵌入层结果 + 位置编码结果)
+    position_x = use_position()
+    # 3. 定义遍历, 表示Q, K, V, 因为是自注意力机制, Q,K,V都用同一个张量.
+    query = key = value = position_x
+    # 4. 创建掩码张量, 形状是: [batch_size, seq_len, seq_len]
+    mask = torch.zeros(8, 4, 4)
+    # 5. 将数据送给模型 -> 获取多头注意力结果.
+    result = my_attention(query, key, value, mask)
+    # 6. 打印输出形状, 要与输入的形状保持一致, 即: [2, 4, 512]
+    print(f'(多头注意力层)result: {result.shape}')
+
+    # 7. 返回多头注意力结果, 后续可以直接用.
+    return result
 ```
 
-### 4.3.4 前馈连接层
 
-#### 概念
 
-前馈神经网络（Feed Forward Network, FFN）对每个位置独立应用相同的全连接层。它由两个线性变换和一个激活函数组成。
+**代码实现2：**
 
-**公式**：
+使用 PyTorch 内置的 `nn.MultiheadAttention`
 
-$$
-\text{FFN}(x) = \max(0, x W_1 + b_1) W_2 + b_2
-$$
+|     参数名      |         含义          |                             作用                             |
+| :-------------: | :-------------------: | :----------------------------------------------------------: |
+|   `embed_dim`   |       模型维度        |            输入和输出的特征维度，必须等于 d_model            |
+|   `num_heads`   |      注意力头数       |                  将模型维度分成多少个并行头                  |
+|    `dropout`    |     Dropout 概率      |             应用于注意力权重的 dropout，默认 0.0             |
+|     `bias`      |     是否使用偏置      |                线性层是否包含偏置，默认 True                 |
+|  `batch_first`  |       批次优先        | 若为 True，输入形状为 `(batch, seq, feature)`，否则为 `(seq, batch, feature)` |
+|  `add_bias_kv`  | 是否添加偏置到 K 和 V |                          默认 False                          |
+| `add_zero_attn` |   是否添加零注意力    |                          默认 False                          |
+|     `kdim`      |     键的特征维度      |                      默认为 `embed_dim`                      |
+|     `vdim`      |     值的特征维度      |                      默认为 `embed_dim`                      |
 
-**代码实现**：
-
-```python
-class PositionwiseFeedForward(nn.Module):
-    def __init__(self, d_model, d_ff, dropout=0.1):
-        super().__init__()
-        self.w_1 = nn.Linear(d_model, d_ff)
-        self.w_2 = nn.Linear(d_ff, d_model)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        return self.w_2(self.dropout(F.relu(self.w_1(x))))
-```
-
-### 4.3.5 规范化层
-
-#### 概念
-
-层归一化（Layer Normalization）对每个样本的特征维度进行归一化，稳定训练。
-
-**公式**：
-
-$$
-\text{LayerNorm}(x) = \gamma \cdot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta
-$$
-
-**PyTorch API**：`torch.nn.LayerNorm`
-
-**常用参数表**：
-
-| 参数名               | 含义         | 作用                                        |
-| -------------------- | ------------ | ------------------------------------------- |
-| `normalized_shape`   | 归一化维度   | 指定对哪些维度进行归一化，通常为 d_model    |
-| `eps`                | 数值稳定性   | 防止除以零的小常数，默认 1e-5               |
-| `elementwise_affine` | 是否仿射变换 | 若为 True，使用可学习的 $\gamma$ 和 $\beta$ |
-
-**代码实现**：
-
-```python
-class LayerNorm(nn.Module):
-    def __init__(self, features, eps=1e-6):
-        super().__init__()
-        self.a_2 = nn.Parameter(torch.ones(features))
-        self.b_2 = nn.Parameter(torch.zeros(features))
-        self.eps = eps
-
-    def forward(self, x):
-        mean = x.mean(-1, keepdim=True)
-        std = x.std(-1, keepdim=True)
-        return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
-```
-
-### 4.3.6 子层连接结构
-
-#### 概念
-
-子层连接（Sublayer Connection）将每个子层（如注意力、前馈网络）包裹起来，加入残差连接和层归一化。
-
-**公式**：
-
-$$
-\text{Sublayer}(x) = \text{LayerNorm}(x + \text{Dropout}(\text{Sublayer}(x)))
-$$
-
-**代码实现**：
-
-```python
-class SublayerConnection(nn.Module):
-    def __init__(self, size, dropout):
-        super().__init__()
-        self.norm = LayerNorm(size)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x, sublayer):
-        return x + self.dropout(sublayer(self.norm(x)))
-```
-
-### 4.3.7 编码器层
-
-#### 概念
-
-编码器层由两个子层连接组成：
-
-1. 多头自注意力
-2. 前馈神经网络
-
-**代码实现**：
-
-```python
-class EncoderLayer(nn.Module):
-    def __init__(self, size, self_attn, feed_forward, dropout):
-        super().__init__()
-        self.self_attn = self_attn
-        self.feed_forward = feed_forward
-        self.sublayer = nn.ModuleList([copy.deepcopy(SublayerConnection(size, dropout)) for _ in range(2)])
-        self.size = size
-
-    def forward(self, x, mask):
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
-        return self.sublayer[1](x, self.feed_forward)
-```
-
-**编码器整体**：
-
-```python
-class Encoder(nn.Module):
-    def __init__(self, layer, N):
-        super().__init__()
-        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(N)])
-        self.norm = LayerNorm(layer.size)
-
-    def forward(self, x, mask):
-        for layer in self.layers:
-            x = layer(x, mask)
-        return self.norm(x)
-```
-
----
-
-## 4.4 解码器部分实现
-
-### 4.4.1 解码器介绍
-
-解码器同样由 N 个相同的层堆叠而成，每层包含三个子层：
-
-1. **掩码多头自注意力**：防止看到未来信息。
-2. **多头交叉注意力**：Query 来自解码器，Key 和 Value 来自编码器输出。
-3. **前馈神经网络**。
-
-每个子层都配有残差连接和层归一化。
-
-### 4.4.2 解码器层
-
-**代码实现**：
-
-```python
-class DecoderLayer(nn.Module):
-    def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
-        super().__init__()
-        self.size = size
-        self.self_attn = self_attn
-        self.src_attn = src_attn
-        self.feed_forward = feed_forward
-        self.sublayer = nn.ModuleList([copy.deepcopy(SublayerConnection(size, dropout)) for _ in range(3)])
-
-    def forward(self, x, memory, src_mask, tgt_mask):
-        # 1. 掩码自注意力
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, tgt_mask))
-        # 2. 交叉注意力
-        x = self.sublayer[1](x, lambda x: self.src_attn(x, memory, memory, src_mask))
-        # 3. 前馈网络
-        return self.sublayer[2](x, self.feed_forward)
-```
-
-### 4.4.3 解码器
-
-**代码实现**：
-
-```python
-class Decoder(nn.Module):
-    def __init__(self, layer, N):
-        super().__init__()
-        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(N)])
-        self.norm = LayerNorm(layer.size)
-
-    def forward(self, x, memory, src_mask, tgt_mask):
-        for layer in self.layers:
-            x = layer(x, memory, src_mask, tgt_mask)
-        return self.norm(x)
-```
-
----
-
-## 4.5 模型构建
-
-### 4.5.1 模型构建介绍
-
-将编码器、解码器、输入嵌入、位置编码和输出层组合起来，形成完整的 Transformer 模型。
-
-### 4.5.2 编码器-解码器结构实现
-
-**代码实现**：
-
-```python
-class EncoderDecoder(nn.Module):
-    def __init__(self, encoder, decoder, src_embed, tgt_embed, generator):
-        super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-        self.src_embed = src_embed
-        self.tgt_embed = tgt_embed
-        self.generator = generator
-
-    def forward(self, src, tgt, src_mask, tgt_mask):
-        memory = self.encode(src, src_mask)
-        return self.decode(memory, src_mask, tgt, tgt_mask)
-
-    def encode(self, src, src_mask):
-        return self.encoder(self.src_embed(src), src_mask)
-
-    def decode(self, memory, src_mask, tgt, tgt_mask):
-        return self.decoder(self.tgt_embed(tgt), memory, src_mask, tgt_mask)
-```
-
-### 4.5.3 Transformer模型构建
-
-**代码实现**：
-
-```python
-class Generator(nn.Module):
-    def __init__(self, d_model, vocab):
-        super().__init__()
-        self.proj = nn.Linear(d_model, vocab)
-
-    def forward(self, x):
-        return F.log_softmax(self.proj(x), dim=-1)
-
-def make_model(src_vocab, tgt_vocab, N=6, d_model=512, d_ff=2048, h=8, dropout=0.1):
-    c = copy.deepcopy
-    attn = MultiHeadedAttention(h, d_model)
-    ff = PositionwiseFeedForward(d_model, d_ff, dropout)
-    position = PositionalEncoding(d_model, dropout)
-    model = EncoderDecoder(
-        Encoder(EncoderLayer(d_model, c(attn), c(ff), dropout), N),
-        Decoder(DecoderLayer(d_model, c(attn), c(attn), c(ff), dropout), N),
-        nn.Sequential(Embeddings(src_vocab, d_model), c(position)),
-        nn.Sequential(Embeddings(tgt_vocab, d_model), c(position)),
-        Generator(d_model, tgt_vocab)
-    )
-    # 参数初始化
-    for p in model.parameters():
-        if p.dim() > 1:
-            nn.init.xavier_uniform_(p)
-    return model
-```
-
-**常用参数表**：
-
-| 参数名      | 含义               | 作用                     |
-| ----------- | ------------------ | ------------------------ |
-| `src_vocab` | 源语言词汇表大小   | 输入嵌入层的维度         |
-| `tgt_vocab` | 目标语言词汇表大小 | 输出嵌入层和生成器的维度 |
-| `N`         | 编码器/解码器层数  | 堆叠多少层               |
-| `d_model`   | 模型维度           | 所有子层和嵌入的维度     |
-| `d_ff`      | 前馈网络内部维度   | 前馈网络的隐藏层维度     |
-| `h`         | 注意力头数         | 多头注意力的头数         |
-| `dropout`   | Dropout 概率       | 防止过拟合               |
-
----
-
-## 4.6 常用API汇总
-
-### 4.6.1 `torch.nn.Transformer`
-
-PyTorch 提供了内置的 Transformer 模块 `torch.nn.Transformer`，可以直接使用。
-
-**常用参数表**：
-
-|        参数名        |     含义     |                     作用                      |
-| :------------------: | :----------: | :-------------------------------------------: |
-|      `d_model`       |   模型维度   |              输入输出的特征维度               |
-|       `nhead`        |  注意力头数  |               多头注意力的头数                |
-| `num_encoder_layers` |  编码器层数  |                编码器堆叠层数                 |
-| `num_decoder_layers` |  解码器层数  |                解码器堆叠层数                 |
-|  `dim_feedforward`   | 前馈网络维度 |             前馈网络的隐藏层维度              |
-|      `dropout`       | Dropout 概率 |                   默认 0.1                    |
-|     `activation`     |   激活函数   |             默认 relu，可选 gelu              |
-|    `batch_first`     |   批次优先   | 若为 True，输入形状为 `(batch, seq, feature)` |
-
-**示例**：
-
-```python
-transformer = nn.Transformer(d_model=512, nhead=8, num_encoder_layers=6, num_decoder_layers=6)
-src = torch.randn(10, 32, 512)  # (seq_len, batch, d_model)
-tgt = torch.randn(20, 32, 512)
-out = transformer(src, tgt)
-print(out.shape)  # (20, 32, 512)
-```
-
-### 4.6.2 `torch.nn.MultiheadAttention`
-
-**常用参数表**：
-
-| 参数名        | 含义         | 作用                 |
-| ------------- | ------------ | -------------------- |
-| `embed_dim`   | 模型维度     | 输入特征维度         |
-| `num_heads`   | 注意力头数   | 多头数量             |
-| `dropout`     | Dropout 概率 | 注意力 dropout       |
-| `batch_first` | 批次优先     | 输入形状是否批次在前 |
-
-**示例**：
-
-```python
-mha = nn.MultiheadAttention(embed_dim=512, num_heads=8, batch_first=True)
-query = torch.randn(32, 10, 512)
-key = torch.randn(32, 20, 512)
-value = torch.randn(32, 20, 512)
-attn_output, attn_weights = mha(query, key, value)
-print(attn_output.shape)  # (32, 10, 512)
-```
-
-### 4.6.3 `torch.nn.TransformerEncoderLayer` 与 `torch.nn.TransformerDecoderLayer`
-
-**TransformerEncoderLayer 常用参数表**：
-
-| 参数名            | 含义         | 作用           |
-| ----------------- | ------------ | -------------- |
-| `d_model`         | 模型维度     | 输入特征维度   |
-| `nhead`           | 注意力头数   | 多头数量       |
-| `dim_feedforward` | 前馈网络维度 | 前馈隐藏层维度 |
-| `dropout`         | Dropout 概率 | 默认 0.1       |
-| `activation`      | 激活函数     | relu 或 gelu   |
-| `batch_first`     | 批次优先     | 输入形状       |
-
-**TransformerDecoderLayer** 参数类似，额外支持交叉注意力。
-
-**示例**：
-
-```python
-encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8, batch_first=True)
-transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
-src = torch.randn(32, 10, 512)
-out = transformer_encoder(src)
-print(out.shape)  # (32, 10, 512)
-```
-
----
-
-## 4.7 总结
-
-Transformer 是现代 NLP 的基石，其核心组件包括：
-
-- **输入部分**：文本嵌入 + 位置编码。
-- **编码器**：多头自注意力 + 前馈网络，配有残差连接和层归一化。
-- **解码器**：掩码自注意力 + 交叉注意力 + 前馈网络。
-- **输出层**：线性层 + softmax，输出目标词汇表概率分布。
-
-通过堆叠多层编码器和解码器，Transformer 能够捕捉长距离依赖并支持并行计算。其后续发展出 BERT、GPT、T5 等预训练模型，推动了 NLP 领域的革命性进步。
-
-
-
-
-
-
-
-
-
-
-
-## 四、代码实现
-
-### 4.1 手动实现多头注意力（PyTorch）
-
-```python
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import math
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads, dropout=0.1):
-        super().__init__()
-        assert d_model % num_heads == 0, "d_model 必须能被 num_heads 整除"
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-
-        # 定义线性变换层
-        self.W_q = nn.Linear(d_model, d_model)
-        self.W_k = nn.Linear(d_model, d_model)
-        self.W_v = nn.Linear(d_model, d_model)
-        self.W_o = nn.Linear(d_model, d_model)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, query, key, value, mask=None):
-        batch_size = query.size(0)
-
-        # 1. 线性变换并分头
-        # 输入形状: [batch, seq_len, d_model]
-        Q = self.W_q(query)  # [batch, n, d_model]
-        K = self.W_k(key)    # [batch, m, d_model]
-        V = self.W_v(value)  # [batch, m, d_model]
-
-        # 重塑为 [batch, num_heads, seq_len, d_k]
-        Q = Q.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        K = K.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        V = V.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-
-        # 2. 计算缩放点积注意力
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
-        attn_weights = F.softmax(scores, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-        context = torch.matmul(attn_weights, V)  # [batch, num_heads, n, d_k]
-
-        # 3. 拼接多头
-        context = context.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
-
-        # 4. 最终线性变换
-        output = self.W_o(context)
-        return output, attn_weights
-```
-
-### 4.2 使用 PyTorch 内置的 `nn.MultiheadAttention`
+示例代码：
 
 ```python
 import torch
@@ -7182,35 +6832,1880 @@ print(output.shape)      # torch.Size([4, 10, 512])
 print(attn_weights.shape) # torch.Size([4, 10, 10])
 ```
 
-### 4.3 `nn.MultiheadAttention` 常用参数表
-
-| 参数名          | 含义                  | 作用                                                         |
-| --------------- | --------------------- | ------------------------------------------------------------ |
-| `embed_dim`     | 模型维度              | 输入和输出的特征维度，必须等于 d_model                       |
-| `num_heads`     | 注意力头数            | 将模型维度分成多少个并行头                                   |
-| `dropout`       | Dropout 概率          | 应用于注意力权重的 dropout，默认 0.0                         |
-| `bias`          | 是否使用偏置          | 线性层是否包含偏置，默认 True                                |
-| `batch_first`   | 批次优先              | 若为 True，输入形状为 `(batch, seq, feature)`，否则为 `(seq, batch, feature)` |
-| `add_bias_kv`   | 是否添加偏置到 K 和 V | 默认 False                                                   |
-| `add_zero_attn` | 是否添加零注意力      | 默认 False                                                   |
-| `kdim`          | 键的特征维度          | 默认为 `embed_dim`                                           |
-| `vdim`          | 值的特征维度          | 默认为 `embed_dim`                                           |
-
-## 五、总结
-
-- **多头注意力**通过多个独立的线性投影，将 Q、K、V 映射到不同的子空间，并行计算注意力，最后拼接并融合。
-- **作用**：捕捉多方面的信息，增强模型表达能力，稳定训练，支持并行计算。
-- **核心公式**：$\text{MultiHead}(Q, K, V) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W^O$，其中 $\text{head}_i = \text{Attention}(Q W_i^Q, K W_i^K, V W_i^V)$。
-- **实现**：可以手动实现，也可以直接使用 PyTorch 的 `nn.MultiheadAttention`。
-- **参数**：`embed_dim`、`num_heads`、`dropout`、`batch_first` 等是关键配置。
-
-多头注意力是 Transformer 成功的关键之一，它使模型能够同时从多个角度理解序列信息，为后续的预训练语言模型奠定了基础。
 
 
+### 4.3.4 前馈连接层
+
+前馈连接层（Position-wise Feed-Forward Network, FFN），又称逐位置前馈网络，是 Transformer 中每个编码器层和解码器层的重要组成部分。它是一个简单的两层全连接神经网络，对序列中的**每个位置独立且相同地**应用。
+
+在 Transformer 原论文中，前馈连接层定义如下：
+
+$$
+\text{FFN}(x) = \max(0, x W_1 + b_1) W_2 + b_2
+$$
+
+变量说明：
+
+|      变量名      |       含义       |                   作用                   |              形状               |
+| :--------------: | :--------------: | :--------------------------------------: | :-----------------------------: |
+|       $x$        |     输入张量     |     来自上一层（如注意力子层）的输出     |       $[B, n, d_{model}]$       |
+|      $W_1$       |  第一层权重矩阵  |   将输入从 $d_{model}$ 映射到 $d_{ff}$   |      $[d_{model}, d_{ff}]$      |
+|      $b_1$       |  第一层偏置向量  |              调整第一层输出              |           $[d_{ff}]$            |
+|      $W_2$       |  第二层权重矩阵  | 将中间表示从 $d_{ff}$ 映射回 $d_{model}$ |      $[d_{ff}, d_{model}]$      |
+|      $b_2$       |  第二层偏置向量  |              调整第二层输出              |          $[d_{model}]$          |
+|   $d_{model}$    |     模型维度     |           输入和输出的特征维度           |          标量，如 512           |
+|     $d_{ff}$     | 前馈网络内部维度 |             中间隐藏层的维度             | 标量，通常 $4 \times d_{model}$ |
+|       $B$        |     批次大小     |            一次处理的样本数量            |              标量               |
+|       $n$        |     序列长度     |             序列中的位置数量             |              标量               |
+| $\max(0, \cdot)$ |  ReLU 激活函数   |                引入非线性                |           逐元素操作            |
+
+“逐位置”（Position-wise）的含义是：对于输入序列中的**每一个位置**，前馈网络都独立地应用相同的变换。也就是说，不同位置之间不进行信息交互，各自独立地经过同一个全连接网络。
+
+
+
+#### 4.3.4.1 公式推导
+
+前馈连接层由两个线性变换和一个非线性激活函数组成：
+
+1. **第一个线性变换**：将输入从 $d_{model}$ 维映射到 $d_{ff}$ 维（通常 $d_{ff} = 4 \times d_{model}$）。
+   $$
+   h = x W_1 + b_1
+   $$
+
+2. **非线性激活**：应用 ReLU 激活函数。
+   $$
+   h' = \max(0, h)
+   $$
+
+3. **第二个线性变换**：将 $d_{ff}$ 维映射回 $d_{model}$ 维。
+   $$
+   y = h' W_2 + b_2
+   $$
+
+
+
+#### 4.3.4.2 维度变化
+
+假设：
+
+- 输入维度：$d_{model}$（例如 512）
+- 中间维度：$d_{ff}$（例如 2048）
+
+维度变化如下：
+
+$$
+[B, n, d_{model}] \xrightarrow{W_1} [B, n, d_{ff}] \xrightarrow{\text{ReLU}} [B, n, d_{ff}] \xrightarrow{W_2} [B, n, d_{model}]
+$$
+
+其中：
+
+$B$：批次大小，$n$：序列长度，$d_{model}$：模型维度，$d_{ff}$：前馈网络内部维度
+
+
+
+#### 4.3.4.3 升降维的作用
+
+1. **增加表达能力**：将维度从 $d_{model}$ 扩展到 $d_{ff}$，使网络能够在更高维的空间中进行非线性变换，增强模型的表达能力。
+2. **引入非线性**：通过 ReLU 激活函数，引入非线性，使模型能够学习更复杂的函数。
+3. **瓶颈结构**：升维-激活-降维的结构类似于自编码器中的瓶颈层，能够在高维空间中提取特征，再压缩回原始维度。
+4. **原论文设计**：$d_{ff} = 4 \times d_{model}$ 是原论文的实验选择，在实践中被广泛采用。
+
+
+
+#### 4.3.4.4 前馈连接层的作用
+
+**1、引入非线性变换**：注意力机制本质上是线性的加权求和（softmax 加权），虽然能够捕捉位置之间的关系，但缺乏非线性变换能力。前馈连接层通过 ReLU 激活函数引入非线性，使模型能够学习更复杂的特征表示。
+
+**2、增强模型容量：**前馈连接层包含大量的可学习参数（两个线性层的参数量约为 $2 \times d_{model} \times d_{ff}$），显著增加了模型的容量，使其能够拟合更复杂的数据分布。
+
+**3、逐位置特征提取：**由于前馈连接层对每个位置独立应用，它可以看作是对每个位置的特征进行独立的非线性变换，提取更高级的语义特征。
+
+**4、与注意力机制互补：**
+
+- **注意力机制**：负责捕捉序列中不同位置之间的依赖关系，进行信息的聚合。
+- **前馈连接层**：负责对每个位置的特征进行非线性变换，增强表示能力。
+
+两者结合，使 Transformer 既能建模全局依赖，又能进行复杂的特征变换。
+
+
+
+#### 4.3.4.5 示例代码
+
+**代码实现**：
+
+```python
+# 8. 初始化前馈全连接层(它包含2个全连接层) -> 对注意力层的结果进一步加工(强化特征)
+class FeedForward(nn.Module):
+    # 1. 初始化函数
+    # 参1: 输入数据的词向量维度(例如: 512), 参2: 前馈全连接层维度(例如: 2048), 参3: 随机失活概率(例如: 0.1)
+    def __init__(self, d_model, d_ff, dropout_p=0.1):
+        # 1. 初始化父类成员.
+        super().__init__()
+        # 2. 定义第1个全连接层, 输入维度: d_model, 输出维度: d_ff
+        self.linear1 = nn.Linear(d_model, d_ff)     # 512维 -> 2048维
+        # 3. 定义第2个全连接层, 输入维度: d_ff, 输出维度: d_model
+        self.linear2 = nn.Linear(d_ff, d_model)     # 2048维 -> 512维
+        # 4. 创建随机失活层.
+        self.dropout = nn.Dropout(p=dropout_p)
+
+    # 2. 前向传播 -> 实现前馈全连接层的计算流程.
+    def forward(self, x):
+        # 1. 通过第1个全连接层, 映射到 d_ff的维度.
+        x = self.linear1(x)
+        # 2. 通过激活函数处理(Relu会把负值变为0, 保留正数, 增加了非线性功能) -> 通过随机失活处理.
+        x = self.dropout(F.relu(x))
+        # 3. 通过第2个全连接层, 映射到 d_model的维度.
+        x = self.linear2(x)
+        # 4. 返回结果.
+        return x
+
+# 9. 测试前馈全连接层 -> 先拿到多头注意力层结果, 把结果送给前馈全连接层处理.
+def use_ff():
+    # 1. 获取多头注意力层结果.
+    attn_x = use_multihead()        # 形状: [2, 4, 512]
+    # 2. 创建前馈全连接层对象.
+    my_ff = FeedForward(512, 2048)
+    # 3. 将多头注意力层结果, 送给前馈全连接层处理.
+    result = my_ff(attn_x)
+    # 4. 输出结果.
+    print(f'(前馈全连接层)result: {result.shape}')        # torch.Size([2, 4, 512])
+    # 5. 返回结果.
+    return result
+```
+
+
+
+### 4.3.5 规范化层
+
+规范化层（Normalization Layer）是深度神经网络中用于稳定训练、加速收敛的一种技术。在 Transformer 中，使用的是**层归一化（Layer Normalization, LayerNorm）**。
+
+在深层神经网络中，随着层数增加，每层输入的分布会发生变化，导致内部协变量偏移（Internal Covariate Shift），使得训练变得困难：
+
+1. **梯度消失或爆炸**：输入分布的变化可能导致梯度不稳定。
+2. **训练速度慢**：模型需要不断适应新的分布，收敛缓慢。
+3. **对初始化敏感**：不同的参数初始化可能导致训练效果差异很大。
+4. **难以使用大学习率**：分布不稳定时，大学习率容易导致训练发散。
+
+层归一化对每个样本的特征维度进行归一化，即对同一个样本的所有特征计算均值和方差，然后进行标准化，再通过可学习的缩放和平移参数恢复表达能力。
+
+
+
+#### 4.3.5.1 公式推导
+
+假设输入张量 $x$ 的形状为 $[B, n, d_{model}]$，其中 $B$ 是批次大小，$n$ 是序列长度，$d_{model}$ 是特征维度。
+
+层归一化对**每个样本的每个位置**的特征维度进行归一化，即对最后一维 $d_{model}$ 计算均值和方差。
+
+**计算均值**
+$$
+\mu = \frac{1}{d_{model}} \sum_{i=1}^{d_{model}} x_i
+$$
+
+**计算方差**
+$$
+\sigma^2 = \frac{1}{d_{model}} \sum_{i=1}^{d_{model}} (x_i - \mu)^2
+$$
+
+**标准化**
+$$
+\hat{x}_i = \frac{x_i - \mu}{\sqrt{\sigma^2 + \epsilon}}
+$$
+
+其中 $\epsilon$ 是一个很小的常数（如 $10^{-5}$），用于防止除以零。
+
+**缩放和平移**
+
+为了保持模型的表达能力，引入可学习的参数 $\gamma$（缩放）和 $\beta$（平移）：
+
+$$
+y_i = \gamma_i \cdot \hat{x}_i + \beta_i
+$$
+
+其中 $\gamma$ 和 $\beta$ 的维度为 $d_{model}$，是可学习的参数。加上可学习的 `γ` 和 `β` 后：
+
+- 模型可以学习“哪些维度需要放大，哪些需要缩小”。
+- 模型可以学习“哪些维度需要整体偏移”。
+
+
+
+**完整公式**
+$$
+\text{LayerNorm}(x) = \gamma \cdot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta
+$$
+
+变量说明表
+
+|   变量名    |          含义           |           作用           |        形状         |
+| :---------: | :---------------------: | :----------------------: | :-----------------: |
+|     $x$     |        输入张量         |     来自上一层的输出     | $[B, n, d_{model}]$ |
+|    $x_i$    | 输入张量的第 $i$ 个特征 |     参与归一化的元素     |        标量         |
+|    $\mu$    |          均值           |     对特征维度求平均     |     $[B, n, 1]$     |
+| $\sigma^2$  |          方差           |     对特征维度求方差     |     $[B, n, 1]$     |
+| $\hat{x}_i$ |      标准化后的值       |        归一化结果        |        标量         |
+| $\epsilon$  |     数值稳定性常数      | 防止除以零，如 $10^{-5}$ |        标量         |
+|  $\gamma$   |        缩放参数         |   可学习，恢复表达能力   |    $[d_{model}]$    |
+|   $\beta$   |        平移参数         |   可学习，恢复表达能力   |    $[d_{model}]$    |
+|    $y_i$    |          输出           |    归一化后的最终结果    |        标量         |
+|     $B$     |        批次大小         |    一次处理的样本数量    |        标量         |
+|     $n$     |        序列长度         |     序列中的位置数量     |        标量         |
+| $d_{model}$ |        模型维度         |         特征维度         |        标量         |
+
+
+
+##### 4.3.5.1.1 个人疑问
+
+问：为什么可以对词向量的不同维度之间进行均值和归一化的处理？难道不应该是不同维度代表不同的信息吗？
+
+解：
+
+**神经网络中的词向量，每个维度并没有独立的、可解释的语义。**在神经网络中，语义信息是**分布式**存储的
+
+**LayerNorm 的目标**：让每个词向量的 512 个数，整体上服从“均值 0、方差 1”的标准分布。
+
+归一化后还有**可学习的参数**的 `γ` 和 `β`：
+
+所以 LayerNorm 不是“强制抹平所有维度”，而是“先标准化，再让模型自己决定怎么调整”。
+
+
+
+#### 4.3.5.2 示例代码
+
+代码实现：
+
+```python
+# 10. 定义1个规范化层, 初始化规范化层(Layer Normalization), 用于对张量进行标准化处理, 让模型训练更稳定.
+class LayerNorm(nn.Module): 
+    # 1. 初始化函数.
+    def __init__(self, features, eps=1e-6):
+        """
+        features: 词嵌入维度(词向量维度: 512)
+        eps: 小常数, 防止分母变为0
+        """
+        # 1. 初始化父类成员.
+        super().__init__()
+        # 回顾线性公式: y = kx + b -> ax + b
+        # 2. 定义可学习的缩放系数a, 初始化为1, 形状为: [features]
+        # a的作用: 对标准化后的数据进行缩放.
+        self.a = nn.Parameter(torch.ones(features))
+        # 3. 定义可学习的偏置系数b(平移系数), 初始化为0, 形状为: [features]
+        # b的作用: 对标准化后的数据进行平移.
+        self.b = nn.Parameter(torch.zeros(features))
+        # 4. 定义eps: 小常数, 防止分母变为0.
+        self.eps = eps
+
+    # 2. 前向传播 -> 实现对张量的标准化处理.
+    def forward(self, x):
+        # x的形状: [batch_size, seq_len, d_model] -> [2, 4, 512]
+        # 1. 计算最后1维(词向量维度)的均值.
+        # 参1: -1表示最后1维,   keepdim=True 表示保持维度.
+        x_mean = x.mean(-1, keepdim=True)       # 形状: [2, 4, 512] -> [2, 4, 1]
+
+        # 2. 计算最后1维的标准差
+        x_std = x.std(-1, keepdim=True)         # 形状: [2, 4, 512] -> [2, 4, 1]
+
+        # 3. 标准化处理 -> 回顾线性公式: y = kx + b -> ax + b
+        return self.a * (x - x_mean) / (x_std + self.eps) + self.b
+
+
+# 11. 测试规范化层, 思路: 拿到多头注意力机制结果 -> 把该结果传入前馈全连接进行处理 -> 把处理结果传入规范化层进行处理 -> 返回结果.
+def use_layer_norm():
+    # 1. 获取 前馈全连接层 结果.
+    ff_x = use_ff()
+    # 2. 创建规范化层对象.
+    my_layer_norm = LayerNorm(512)
+    # 3. 将前馈全连接层结果, 传给 规范化层.
+    result = my_layer_norm(ff_x)
+    # 4. 输出结果.
+    print(f'(规范化层)result: {result.shape}')      # [2, 4, 512]
+```
+
+
+
+#### 4.3.5.3 LayerNorm 和 BatchNorm 对比
+
+BatchNorm：批量归一化，针对于**同一个特征，不同的样本**之间进行规范化。一般用于处理图片
+
+LayerNorm：层归一化，针对**同一样本，对不同的特征**进行规范化。一般用于处理文本
+
+|        对比维度        |                 LayerNorm（层归一化）                  |                  BatchNorm（批次归一化）                   |
+| :--------------------: | :----------------------------------------------------: | :--------------------------------------------------------: |
+|       归一化对象       |           对每个样本的所有特征维度进行归一化           |              对每个特征在批次维度上进行归一化              |
+|        计算维度        |           对最后一维（特征维）计算均值和方差           |    对批次维（以及空间维，如 CNN 的 H×W）计算均值和方差     |
+|        输入形状        |           通常为 `[B, n, d]`，对 `d` 归一化            | 通常为 `[B, C, H, W]` 或 `[B, d]`，对 `B`（及 H、W）归一化 |
+|    是否依赖批次大小    |                不依赖，每个样本独立计算                |               依赖，批次统计量决定归一化结果               |
+|    对变长序列的支持    |                  支持，适合 NLP 序列                   |             不友好，序列长度变化导致统计不稳定             |
+|     对小批次的表现     |                 稳定，不受批次大小影响                 |               不稳定，批次过小导致统计偏差大               |
+|       可学习参数       | 缩放参数 $\gamma$ 和平移参数 $\beta$，维度为特征维 $d$ |   缩放参数 $\gamma$ 和平移参数 $\beta$，维度为通道数 $C$   |
+|       正则化效果       |                          较弱                          |                  较强，因批次统计引入噪声                  |
+| 是否缓解内部协变量偏移 |              是，但针对每个样本的特征分布              |               是，针对每个特征在批次上的分布               |
+|        典型应用        |             Transformer、RNN、NLP 序列模型             |                    CNN 图像分类、检测等                    |
+|     均值/方差来源      |                   同一样本的特征维度                   |               同一特征在批次维度上的所有样本               |
+|   是否受序列长度影响   |                           否                           |                             是                             |
+|    是否适合在线学习    |                           是                           |                   否，需要更新全局统计量                   |
+|   是否适合小批次训练   |                           是                           |                             否                             |
+|   是否适合分布式训练   |               容易，无需跨设备同步统计量               |                复杂，需跨设备同步批次统计量                |
+
+
+
+### 4.3.6 子层连接结构
+
+子层连接（Sublayer Connection）将每个子层（多头注意力子层、前馈全连接层）包裹起来，加入残差连接和层归一化。
+
+标准 Transformer 有两种常见顺序：
+
+|          方式           |                 公式                  |       特点       |
+| :---------------------: | :-----------------------------------: | :--------------: |
+| **Post-LN（原始论文）** | $LayerNorm(x + Dropout(Sublayer(x)))$ | 归一化在残差之后 |
+| **Pre-LN（现代常用）**  | $x + Dropout(Sublayer(LayerNorm(x)))$ | 归一化在子层之前 |
+
+**代码实现**：
+
+```python
+from EncoderElement import *
+from InputTest import *
+
+# 1. 初始化子层连接结构, 核心是: 残差连接 + 规范化层, 让模型训练更稳定, 避免梯度消失或者梯度爆炸.
+class SublayerConnection(nn.Module):
+    # 1. 初始化函数.
+    def __init__(self, d_model, dropout=0.1):
+        """
+        d_model: 输入的维度, 即: 词向量维度.
+        dropout: 随机失活的概率
+        """
+        # 1. 初始化父类成员.
+        super().__init__()
+        # 2. 定义规范化层(LayerNorm)
+        self.norm = LayerNorm(d_model)
+        # 3. 定义随机失活层(Dropout)
+        self.dropout = nn.Dropout(dropout)
+
+    # 2. 前向传播函数.
+    def forward(self, x, sublayer):
+        """
+        函数功能: 完整具体的 子层的 计算动作.
+        x: 输入张量, 形状一般数: [batch_size, seq_len, d_model] -> [2, 4, 512]
+        sublayer: 输入的子层对象, 例如: 多头注意力层对象(Multi-Head Attention), 前馈全连接层对象(Feed Forward)
+        """
+        # 子层的核心逻辑: 有两种常见的实现方式.
+        # 原论文 Transformer
+        # 先子层 + dropout，再残差相加，最后 LayerNorm
+        # my_result = self.norm(x + self.dropout(sublayer(x)))
+
+        # 现代 Transformer
+        # 先 LayerNorm，再子层 + dropout，最后残差相加
+        my_result = self.dropout(sublayer(self.norm(x))) + x
+
+        return my_result
+
+# 2. 测试子层连接结构
+def use_sublayer():
+    """
+    测试子层连接结构的完整流程
+        1. 准备输入数据(词嵌入 + 位置编码)
+        2. 实例化子层连接结构.
+        3. 定义子层函数 (这里用 多头注意力 作为示例)
+        4. 通过子层连接处理输入, 验证残差连接和规范化的效果
+    """
+    # 1. 准备输入数据(词嵌入 + 位置编码)
+    x = use_position()
+
+    # 2. 实例化子层连接结构.
+    sublayer_conn = SublayerConnection(d_model=512)
+
+    # 3. 定义子层函数 (这里用 多头注意力 作为示例)
+    # 定义子层对象 -> 充当子层处理, 可以是: 多头注意力层对象(Multi-Head Attention), 前馈全连接层对象(Feed Forward)
+
+    # 思路1: 采用函数嵌套(闭包写法)实现, 定义子层函数 -> 一个可调用的对象, 接受x, 返回处理结果.
+    # def sublayer(x):
+    #     # 3.1 创建 多头注意力层对象(Multi-Head Attention)
+    #     # multi_attn = MultiHeadAttention(d_model=512, h=8)
+    #     # 3.2 计算 注意力, 并返回, 因为是自注意力, 所以: Q=K=V=x
+    #     # return multi_attn(x, x, x)
+    #
+    #     # 合并版写法
+    #     return MultiHeadAttention(d_model=512, h=8)(x, x, x)
+
+    # 4. 通过子层连接处理输入, 验证残差连接和规范化的效果
+    # result = sublayer_conn(x, sublayer)
+ 
+    # 思路2: 采用匿名函数(Lambda表达式实现)
+    # 多头注意力子层
+    # result = sublayer_conn(x, lambda x: MultiHeadAttention(512, 8)(x, x, x))
+
+    # 前馈全连接子层
+    result = sublayer_conn(x, lambda x: FeedForward(d_model=512, d_ff=2048)(x))
+
+
+    # 5. 打印子层处理结果
+    print(f'子层处理结果: {result.shape}')    # 子层处理结果: torch.Size([2, 4, 512])
+
+
+# todo 3. 测试代码.
+if __name__ == '__main__':
+    use_sublayer()
+```
+
+
+
+### 4.3.7 编码器层
+
+编码器层由两个子层连接组成：
+
+1. 多头自注意力
+2. 前馈神经网络
+
+![image-20260913134207230](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260913134207230.png)
+
+**代码实现**：
+
+```python
+from EncoderElement import *
+from InputTest import *
+from EncoderSublayer import *   
+
+# 1. 初始化编码器层 -> 所谓的编码器层, 就是把刚才的两个子层合二为一串起来.
+class EncoderLayer(nn.Module):
+    # 1. 初始化函数.
+    def __init__(self, d_model, self_attn, feed_forward, dropout=0.1):
+        """
+        d_model: 词嵌入维度, 例如: 512
+        self_attn: 多头注意力(对象)
+        feed_forward: 前馈全连接层(对象)
+        dropout: 随机失活概率, 例如: 0.1
+        """
+        # 1. 初始化父类成员.
+        super().__init__()
+
+        # 2. 保存子层实例.
+        self.d_model = d_model
+        self.self_attn = self_attn
+        self.feed_forward = feed_forward  
+
+        # 3. 克隆 两个自称连接结构.
+        self.sublayer = clones(SublayerConnection(d_model, dropout), 2)     # [子层对象1, 子层对象2]
+
+    # 2. 前向传播函数.
+    def forward(self, x, mask):
+        # 1. 第1层 子层连接: 自注意力层.
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
+
+        # 2. 第2层 子层连接: 前馈全连接层.
+        x = self.sublayer[1](x, lambda x: self.feed_forward(x))
+
+        # 3. 返回结果
+        return x
+
+# 2. 测试 编码器层的 流程
+def use_encoder_layer():
+    # 1. 准备数据 -> 位置编码层处理后的数据.
+    x = use_position()      # 形状: [batch_size, seq_len, d_model] -> [2, 4, 512]
+
+    # 2. 实例化子层对象.
+    # 2.1 多头注意力对象.
+    multi_head = MultiHeadAttention(512, 8)
+
+    # 2.2 前馈全连接对象.
+    feed_forward = FeedForward(512, 2048)
+
+    # 3. 创建编码器层对象.
+    encoder_layer = EncoderLayer(512, multi_head, feed_forward)
+
+    # 4. 构建掩码张量, 形状: [batch_size, seq_len, seq_len] -> [2, 4, 4]
+    mask = torch.zeros(8, 4, 4)
+
+    # 5. 执行编码器层 -> 前向传播.
+    output = encoder_layer(x, mask)
+
+    # 6. 打印结果
+    print(f'编码器层输出形状: {output.shape}')      # [batch_size, seq_len, d_model] ->  [2, 4, 512]
+    print(f'编码器层的输出内容: {output}')
+    print(f'编码器层的输出内容: {output[:1, :2, :5]}')       # 第1个句子, 前2个单词, 每个单词的前5个特征
+    print(' -.- ' * 10)
+
+    print(f'编码器层对象: \n{encoder_layer}')
+
+
+# todo 3. 测试代码
+if __name__ == '__main__':
+    use_encoder_layer()
+```
+
+
+
+**编码器整体**：
+
+需要N个编码器层堆叠
+
+```python
+import torch
+from EncoderLayer import *
+
+# 1. 定义编码器类.
+class Encoder(nn.Module):
+    # 1. 初始化函数.
+    def __init__(self, layer, N):
+        """
+        :param layer: 单个编码器层
+        :param N: 编码器层数量
+        """
+        # 1. 初始化父类成员
+        super().__init__()
+        # 2. 克隆N个 编码器层对象.
+        self.layers = clones(layer, N)  # [第1个编码器层, 第2个编码器层, ..., 第N个编码器层]
+        # 3. 定义最终的规范化层.
+        self.norm = LayerNorm(layer.d_model)        # 512维 
+
+    # 2. 定义前向传播函数
+    def forward(self, x, mask):
+        """
+        x: 输入数据, 维度: [batch_size, seq_len, d_model] -> [2, 4, 512]
+        mask: 掩码矩阵, 维度: [batch_size, seq_len, seq_len] -> [8, 4, 4]
+        """
+        # 1. x(待处理的数据) 依次经过 N个 编码器层的处理.
+        for layer in self.layers:
+            # x通过每一个 编码器层的处理.
+            x = layer(x, mask)
+        # 2. 最终规范化. 提升模型的稳定性.
+        return self.norm(x)
+
+
+# 2. 测试编码器对象.
+def use_encoder():
+    # 1. 获取数据 -> 词向量 + 位置编码.
+    x = use_position()
+
+    # 2. 构建单个编码器层(作为基础单元)
+    # 2.1 创建多头注意力层的对象.
+    multi_head = MultiHeadAttention(512, 8)
+    # 2.2 创建前向传播层(前馈全连接层)的对象.
+    feed_forward = FeedForward(512, 2048)
+    # 2.3 把 多头注意力层 和 前馈全连接层 组合起来 -> 编码器层对象.
+    encoder_layer = EncoderLayer(512, multi_head, feed_forward)
+
+    # 3. 实例化编码器(堆叠 3个 编码器层), 论文默认是: 6个.
+    encoder = Encoder(encoder_layer, 3)
+
+    # 4. 构建掩码张量.
+    mask = torch.zeros(8, 4, 4)
+
+    # 5. 执行编码过程.
+    encoder_output = encoder(x, mask)
+
+    # 6. 打印结果.
+    print(f'编码器的输出形状: {encoder_output.shape}')  # [2, 4, 512]
+
+    # 7. 可选, 观察输入 和 输出结果.
+    print(f'输入示例: \n {x[0, 0, :5]}')                # 第1个句子的第1个单词的 前5个词向量.
+    print(f'输出示例: \n {encoder_output[0, 0, :5]}')   # 第1个句子的第1个单词的 前5个词向量.
+
+    # 8. 返回编码器处理后的结果, 作为: 解码器的输入, 继续往后执行.
+    return encoder_output
+
+# todo 3. 测试代码.
+if __name__ == '__main__':
+    use_encoder()
+
+```
+
+---
+
+
+
+## 4.4 解码器部分实现
+
+### 4.4.1 解码器介绍
+
+解码器同样由 N 个相同的层堆叠而成，每层包含三个子层：
+
+1. **掩码多头自注意力**：防止看到未来信息。
+2. **多头交叉注意力**：Query 来自解码器，Key 和 Value 来自编码器输出。
+3. **前馈神经网络**。
+
+每个子层都配有残差连接和层归一化。
+
+### 4.4.2 解码器层
+
+**代码实现**：
+
+```python
+from EncoderFinall import *
+import copy
+import math
+
+# 1. 定义解码器层 -> 由3个子层组成.
+class DecoderLayer(nn.Module):
+    # 1. 初始化函数.
+    def __init__(self, d_model, self_attn, src_attn, feed_forward, dropout=0.1):
+        """
+        d_model: 词向量维度.
+        self_attn: 注意力机制, 处理(解码器输入序列内部关系), 即: 解码器的输入.
+        src_attn: 源序列(编码器-解码器)注意力机制. )
+        feed_forward: 前向传播层, 强化特征的.
+        dropout: 随机失活概率.
+        """
+        # 1. 初始化父类成员.
+        super().__init__()
+        # 2. 定义属性.
+        self.d_model = d_model
+        self.self_attn = self_attn      # 解码器层的 自注意力机制层(掩码多头注意力机制层)
+        self.src_attn = src_attn        # 解码器层的 源序列(编码器-解码器) 注意力机制层
+        self.feed_forward = feed_forward
+        # 3. 定义3个子层连接结构.
+        self.layers = clones(SublayerConnection(d_model, dropout), 3)   # [第1个子层对象, 第2个子层对象, 第3个子层对象]
+
+    # 2. 解码器层的 前向传播.
+    def forward(self, x, encoder_output, source_mask, target_mask):
+        """
+        解码器层的 前向传播动作
+        x: 解码器的输入序列(即: 词嵌入 + 位置编码)
+        encoder_output: 编码器的输出序列(词嵌入 + 源序列位置编码)
+        source_mask: 源序列的填充掩码, 用于 编码器-解码器 注意力
+        target_mask: 目标序列的填充掩码, 用于: 自注意力
+        """
+        # 1. 经过第1个子层 -> 掩码多头自注意力机制层
+        x = self.layers[0](x, lambda x: self.self_attn(x, x, x, target_mask))
+        # 2. 经过第2个子层 -> 多头交叉注意力机制层
+        x = self.layers[1](x, lambda x: self.src_attn(x, encoder_output, encoder_output, source_mask))
+        # 3. 经过第3个子层 -> 前向传播层(前馈全连接层)
+        x = self.layers[2](x, self.feed_forward)
+
+        return x
+
+# 2. 测试解码器层
+def use_decoder_layer():
+    # 1. 定义变量, 记录: 解码器的输入 -> Q
+    y = torch.LongTensor([
+        [1, 2, 3, 4],
+        [5, 6, 7, 8]
+    ])  # 2个句子, 每个句子4个词.
+
+    # 2. 将值传入到Embedding层(词嵌入层)
+    # 2.1 创建词嵌入层对象.
+    my_embed = Embedding(1000, 512)     # 词表大小: 1000, 词嵌入维度: 512
+    # 2.2 把上述的y(输入) -> 词向量形式.
+    embed_y = my_embed(y)
+    print(f'词嵌入层: {embed_y.shape}')     # [2, 4, 512]
+
+    # 3. 将 embed_y(词嵌入处理结果) -> 位置编码.
+    my_position = PositionalEncoding(512, 0.1)
+    position_y = my_position(embed_y)
+    print(f'位置编码层: {position_y}')       # [2, 4, 512]
+
+    # 4.创建多头注意力层
+    multi_attn = MultiHeadAttention(512, 8)
+    self_attn = copy.deepcopy(multi_attn)       # 深拷贝 -> 确保参数不会共享.
+    src_attn = copy.deepcopy(multi_attn)
+
+    # 5. 创建前向传播层(前馈全连接层)
+    ff = FeedForward(512, 2048)
+    # 6. 获取编码器的输出结果.
+    encoder_output = use_encoder()
+
+    # 7. 定义mask(掩码矩阵): source_mask 和 target_mask真实作用不同(要根据你真正的业务来判断), 这里我就随便举例了.
+    source_mask = torch.zeros(8, 4, 4)
+    target_mask = torch.zeros(8, 4, 4)
+
+    # 8. 实例化 解码器层对象
+    my_decoder_layer = DecoderLayer(512, self_attn, src_attn, ff)
+    # 9. 将数据传给解码器层, 获取其输出结果.
+    result = my_decoder_layer(position_y, encoder_output, source_mask, target_mask)
+
+    # 10. 打印结果.
+    print(f'解码器层的形状: {result.shape}')      # [2, 4, 512]
+    print(f'解码器层对象: \n{my_decoder_layer}')
+
+
+# 3. 测试代码.
+if __name__ == '__main__':
+    use_decoder_layer()
+
+```
+
+### 4.4.3 解码器
+
+**代码实现**：
+
+```python
+from DecoderLayer import *
+
+# 1.定义解码器 -> 把多个解码器层(默认: 6个)进行堆叠, 最后加一层规范化层, 让输出更稳定.
+class Decoder(nn.Module):
+    # 1. 初始化函数.
+    def __init__(self, layer, N):
+        """
+        :param layer: 单个解码器层(DecoderLayer)对象, 要被复制N次
+        :param N: 解码器层的堆叠数量
+        """
+        # 1. 初始化父类成员.
+        super().__init__()
+        # 2. 克隆N个解码器层.
+        self.layers = clones(layer, N)
+        # 3. 定义最终的规范化层.
+        self.norm = LayerNorm(layer.d_model)
+
+    # 2. 前向传播函数.
+    def forward(self, x, encoder_output, source_mask, target_mask):
+        """
+        x: 解码器的输入序列(即: 词向量 + 位置编码)
+        encoder_output: 编码器的输出序列(词嵌入 + 源序列位置编码)
+        source_mask: 源序列的填充掩码, 用于: 编码器-解码器 注意力
+        target_mask: 目标序列的填充掩码, 用于 自注意力.
+        """
+        # 1. 数据x经过 多个 解码器层的处理即可.
+        for layer in self.layers:
+            # layer变量: 表示某一个具体的 解码器层.
+            x = layer(x, encoder_output, source_mask, target_mask)
+
+        # 2. 全局规范化, 把所有层的输出再统一标准化, 然后返回.
+        return self.norm(x)
+
+# 2. 测试解码器, 从输入到输出走一遍流程, 验证每层的维度是否正常
+def use_decoder():
+    # 1. 定义变量, 记录: 解码器的输入 -> Q
+    y = torch.LongTensor([
+        [1, 2, 3, 4],
+        [5, 6, 7, 8]
+    ])
+
+    # 2. 将值传入到Embedding层(词嵌入层)
+    # 2.1 创建词嵌入层对象.
+    my_embed = Embedding(1000, 512)     # 词表大小: 1000, 词嵌入维度: 512
+    # 2.2 把上述的y(输入) -> 词向量形式.
+    embed_y = my_embed(y)
+    print(f'词嵌入层: {embed_y.shape}')     # [2, 4, 512]
+
+    # 3. 将 embed_y(词嵌入处理结果) -> 位置编码.
+    my_position = PositionalEncoding(512, 0.1)
+    position_y = my_position(embed_y)
+    print(f'位置编码层: {position_y}')       # [2, 4, 512]
+
+    # 4.创建多头注意力层
+    multi_attn = MultiHeadAttention(512, 8)
+    self_attn = copy.deepcopy(multi_attn)       # 深拷贝 -> 确保参数不会共享.
+    src_attn = copy.deepcopy(multi_attn)
+
+    # 5. 创建前向传播层(前馈全连接层)
+    ff = FeedForward(512, 2048)
+    # 6. 获取编码器的输出结果.
+    encoder_output = use_encoder()
+
+    # 7. 定义mask(掩码矩阵): source_mask 和 target_mask真实作用不同(要根据你真正的业务来判断), 这里我就随便举例了.
+    source_mask = torch.zeros(8, 4, 4)
+    target_mask = torch.zeros(8, 4, 4)
+
+    # 8. 实例化 解码器层对象
+    my_decoder_layer = DecoderLayer(512, self_attn, src_attn, ff)
+
+    # 9. 堆叠6层解码器层 -> 组成解码器.
+    my_decoder = Decoder(my_decoder_layer, 6)
+
+    # 10. 跑一遍解码流程: 输入 -> 6个解码器层 -> 输出
+    result = my_decoder(position_y, encoder_output, source_mask, target_mask)
+    print(f'解码器的形状: {result.shape}')      # [2, 4, 512]
+
+    # 11. 返回解码器处理后的结果.
+    return result
+
+# 3. 测试代码
+if __name__ == '__main__':
+    use_decoder()
+```
+
+---
+
+## 4.5 输出部分实现
+
+Transformer 的输出部分位于解码器堆叠的末端，负责将解码器最后一层的隐藏状态转换为目标词汇表上的概率分布，从而生成最终的输出序列。
+
+输出部分通常包含两个组件：
+
+1. **线性层（Linear Layer）**：将解码器输出的特征维度映射到目标词汇表大小。
+2. **Softmax 层**：将线性层的输出转换为概率分布。
+
+
+
+代码实现：
+
+```python
+from DecoderFinall import *
+
+# todo 1. 定义输出部分, 把解码器的特征 转成 最终预测结果(即: 词汇表中每个词的概率)
+class Generator(nn.Module):
+    # 1. 初始化函数.
+    def __init__(self, d_model, vocab_size):
+        """
+        输出部分的 初始化函数
+        :param d_model: 词向量维度, 例如: 512
+        :param vocab_size: 词汇表大小, 例如: 1000
+        """
+        # 1. 初始化父类成员.
+        super().__init__()
+        # 2. 定义全连接层, 封装输入维度(词向量512) -> 输出维度(1000)
+        self.linear = nn.Linear(d_model, vocab_size)
+
+    # 2. 前向传播函数.
+    def forward(self, x):
+        # 1. 线性层处理: [2, 4, 512] -> [2, 4, 1000]
+        x = self.linear(x)
+
+        # 2. log_softmax()函数: 将分数 转成 对数概率分布.
+        # dim=-1 表示最最后一维(词汇表维度)进行计算, 确保概率和为: 1
+        return F.log_softmax(x, dim=-1)
+
+
+# 2. 测试输出部分.
+def use_generator():
+    """
+    获取解码器的特征 -> 通过生成器转成目标词汇的概率分布 -> 验证输出维度
+    :return:
+    """
+    # 1. 获取解码器的输出结果.
+    result = use_decoder()
+
+    # 2. 初始化 输出生成器, 将512维的解码器输出, 转成1000维的概率分布.
+    generator = Generator(512, 1000)
+    # 3. 通过生成器, 获取概率分布.
+    output = generator(result)
+
+    # 4. 验证输出维度.
+    print(f'output 模型最终输出结果: {output.shape}, {output}')     # [2, 4, 1000]
+
+    # 5. 验证概率和为1.
+    # 5.1 提取第1个样本, 第1个词的 对数概率
+    log_probs = output[0, 0]                  # 形状: torch.Size([1000]), 第1个样本, 第1个词的概率分布
+    # log_probs = output[1, 3]                # 形状: torch.Size([1000]), 第2个样本, 第4个词的概率分布
+    # print(f'log_probs: {log_probs.shape}')    # torch.Size([1000])
+
+    # 5.2 把对数概率 -> 普通概率
+    probs = torch.exp(log_probs)
+    # print(f'probs: {probs}')            # 具体的1000个词的概率分布
+
+    # 5.3 验证概率和为1
+    print(f'第1个词的概率和为: {torch.sum(probs)}') # 1.0
+    print(f'第1个词的概率和为: {probs.sum()}')      # 1.0
+    
+
+# todo 3. 测试代码
+if __name__ == '__main__':
+    use_generator()
+```
+
+
+
+## 4.6 Transformer模型构建
+
+**代码实现**：
+
+```python
+import copy
+from OutputTest import *
+
+# 1. 定义整体的Transformer模型架构, 初始化: Transformer模型的主要组件.
+class EncoderDecoder(nn.Module):
+    # 1. 初始化函数.
+    def __init__(self, source_embed, encoder, target_embed, decoder, generator):
+        """
+        source_embed: 编码器的输入嵌入层, 包含: 词向量 和 位置编码
+        encoder: 编码器模块
+        target_embed: 解码器的输入嵌入层, 包含: 词向量 和 位置编码
+        decoder: 解码器模块
+        generator: 输出层,  将解码器的输出 转换为 词汇表的概率分布
+        """
+        # 1. 初始化父类成员.
+        super().__init__()
+
+        # 2. 定义参数, 记录上述的变量.
+        self.source_embed = source_embed
+        self.encoder = encoder
+        self.target_embed = target_embed
+        self.decoder = decoder
+        self.generator = generator
+
+    # 2. 前向传播
+    def forward(self, source_x, target_y, source_mask, target_mask):
+        """
+        source_x: 编码器的输入, 例如: [batch_size, seq_len] -> [2, 4]
+        target_y: 解码器的输入, 例如: [batch_size, seq_len] -> [2, 4]
+        source_mask: padding mask机制, 防止填充的pad值影响注意力计算, 例如: [8, 4, 4]
+        target_mask: sentence mask机制, 防止未来的信息被提前利用.
+        """
+        # 1. 先得到编码器的输出结果.
+        encoder_result = self.encode(source_x, source_mask)
+
+        # 2. 再得到解码器的输出结果.
+        decoder_result = self.decode(target_y, encoder_result, source_mask, target_mask)
+
+        # 3. 将解码器的结果 进行输出层处理, 并输出.
+        output = self.generator(decoder_result)
+
+        # 4. 返回结果.
+        return output
+
+    # 3. 得到编码器的输出结果, 即:编码器的前向传播过程.
+    def encode(self, source_x, source_mask):
+        """
+        得到编码器的输出结果, 即: 编码器前向传播过程.
+        source_x: 编码器的输入, [batch_size, seq_len] -> [2, 4]
+        source_mask: 输入序列的掩码, [n_head, seq_len, seq_len] -> [2, 4, 4], padding-mask: 防止填充的pad值影响注意力计算结果.
+        :return: encoder_output 编码器的输出 -> [batch_size, seq_len, d_model] -> [2, 4, 512]
+        """
+        # 1. 对source_x进行词嵌入处理, 转成向量.
+        embed_x = self.source_embed(source_x)
+        # 2. 通过编码器处理嵌入后的数据.
+        return self.encoder(embed_x, source_mask)
+
+    # 4. 获取解码器的输出结果, 即:解码器的前向传播过程.
+    def decode(self, target_y, encoder_output, source_mask, target_mask):
+        """
+        得到解码器的输出结果, 即: 解码器的前向传播过程.
+        :param target_y: 解码器的输入, 例如: [batch_size, seq_len] -> [2, 4]
+        :param encoder_output: 编码器的输出结果, [batch_size, seq_len, d_model] -> [2, 4, 512]
+        :param source_mask: 代表padding mask, 防止填充的pad值影响注意力计算结果.
+        :param target_mask: 代表sentence mask, 防止未来的信息被提前利用(防止偷看未来的词)
+        :return: 解码器的输出结果, [batch_size, seq_len, d_model] -> [2, 4, 512]
+        """
+        # 1. 对target_y进行词嵌入处理, 转成向量.
+        embed_y = self.target_embed(target_y)
+        # 2. 通过解码器处理嵌入后的数据.
+        return self.decoder(embed_y, encoder_output, source_mask, target_mask)
+
+
+# 2. 测试Transformer模型架构.
+def make_model():
+    # 1. 定义深拷贝工具函数, 用于复制模块, 相当于起别名
+    c = copy.deepcopy
+
+    # ------------------------------------ 编码器层 ------------------------------------
+    # 2. 编码器, 词嵌入层.
+    source_embed = Embedding(vocab_size=1000, d_model=512)
+    # 3. 编码器, 位置编码层.
+    source_position = PositionalEncoding(d_model=512, dropout=0.1)
+    # 4. 多头注意力机制 -> 实例化.
+    self_attn = MultiHeadAttention(embed_dim=512, head=8)
+    # 5. 定义前馈全连接层.
+    ff = FeedForward(d_model=512, d_ff=2048)
+    # 6. 设置随机失活概率, 防止: 过拟合.
+    dropout_p = 0.2
+    # 7. 单个编码器层的实例化, 包括: 多头注意力机制, 前馈全连接层, 残差连接, 规范化层
+    my_encoder_layer = EncoderLayer(d_model=512, self_attn=self_attn, feed_forward=ff, dropout=dropout_p)
+    # 8. 编码器的初始化.
+    my_encoder = Encoder(my_encoder_layer, N=6)
+
+
+    # ------------------------------------ 解码器层 ------------------------------------
+    # 1. 解码器, 词嵌入层.
+    # target_embed = Embedding(vocab_size=1000, d_model=512)      # 思路1: 手动写一遍.
+    # target_embed = copy.deepcopy(source_embed)                  # 思路2: 深拷贝.
+    target_embed = c(source_embed)                                # 思路3: 深拷贝 -> 语法糖...
+    # 2. 解码器, 位置编码层.
+    target_position = c(source_position) 
+    # 3. 解码器的自注意力机制, 处理: 目标序列内部关系.
+    self_attn1 = c(self_attn)
+    # 4. 解码器-编码器注意力机制: 处理: 目标序列与源序列之间的关系.
+    source_attn1 = c(self_attn)
+    # 5. 定义前馈全连接层.
+    ff1 = c(ff)
+    # 6. 单个解码器层的实例化, 包括: 多头注意力机制, 前馈全连接层, 残差连接, 规范化层
+    my_decoder_layer = DecoderLayer(d_model=512, self_attn=self_attn1, src_attn=source_attn1, feed_forward=ff1, dropout=dropout_p)
+    # 7. 解码器的初始化.
+    my_decoder = Decoder(my_decoder_layer, N=6)
+
+    # ------------------------------------ 输出层 ------------------------------------
+    # 1. 输出层, 实例化.
+    generator = Generator(d_model=512, vocab_size=1000)
+
+    # -------------------------组装完整的Transformer模型 ---------------------------
+    # 编码器输入处理: 词嵌入 + 位置编码
+    # 解码器输入处理: 词嵌入 + 位置编码
+    # 当result = my_transformer(source_x, target_y, source_mask, target_mask)时，
+    # 先执行source_embed、source_position，再执行my_encoder，再执行target_embed、target_position，再执行my_decoder，最后执行generator
+    my_transformer = EncoderDecoder(
+        nn.Sequential(source_embed, source_position),       # 编码器输入处理链，先走参1 再走参2
+        my_encoder,         # 编码器
+        nn.Sequential(target_embed, target_position),       # 解码器输入处理链
+        my_decoder,         # 解码器
+        generator           # 输出层
+    )
+
+    # 打印模型结构
+    print(my_transformer)
+
+
+    # ------------------------------------ Transformer模型的 前向测试 -------------------
+    # 1. 构建测试输入数据 -> 源序列, 假设: 2个句子, 每个句子有4个单词(token)
+    source_x = torch.LongTensor([[1, 2, 3, 4], [5, 6, 7, 8]])
+
+    # 2. 构建目标输入数据 -> 目标序列, 假设: 2个句子, 每个句子有4个单词(token)
+    target_y = torch.LongTensor([[3, 8, 6, 4], [9, 6, 2, 6]])
+
+    # 3. 初始化掩码(实际开发要根据序列长度 动态生成)
+    source_mask = torch.zeros(8, 4, 4)
+    target_mask = c(source_mask)
+
+    # 4. 执行前向传播.
+    print(' -.- ' * 10)
+    result = my_transformer(source_x, target_y, source_mask, target_mask)
+    print(f'result是Transformer的输出结果: {result}')
+    print(f'result的形状: {result.shape}')     # [2, 4, 1000]
+
+
+# 3. 测试代码
+if __name__ == '__main__':
+    make_model()
+```
 
 
 
 
+
+# 五、迁移学习
+
+## 5.1 fastText工具
+
+### 5.1.1 fastText介绍
+
+fastText 是由 Facebook AI Research（FAIR）于 2016 年开源的一款高效文本处理工具包，主要用于两个核心任务：
+
+1. **文本分类**：将文本序列映射到预定义的类别标签，适用于情感分析、垃圾邮件检测、新闻分类等场景。
+2. **词向量训练**：学习单词的分布式表示（词嵌入），并支持子词（subword）信息，能够处理未登录词（OOV）。
+
+fastText 的模型架构与 Word2Vec 中的 CBOW 模型非常相似，但 CBOW 用于预测中间词，而 fastText 用于预测文本的类别
+
+### 5.1.2 fastText优势
+
+fastText 具备以下核心优势：
+
+1. **训练速度极快**：比传统深度学习模型快多个数量级。在使用标准多核 CPU 的情况下，10 分钟内可处理超过 10 亿个词汇
+2. **支持大规模数据**：可处理数十亿词汇级别的语料。
+3. **内置 N-gram 特征**：简化文本预处理流程，能够捕捉词序信息。
+4. **资源消耗低**：模型简单，参数少，适合普通硬件运行，也易于在资源受限的环境中部署。
+5. **无需预训练词向量**：训练过程中自动学习词向量，不依赖外部预训练模型。
+6. **支持多语言**：可用于多种语言的文本分类和词向量训练。
+7. **子词信息**：通过字符级 n-gram 处理未登录词，对低资源、小样本场景尤其友好
+
+
+
+### 5.1.3 fastText安装
+
+pip 直接安装
+
+```bash
+pip install fasttext
+```
+
+如果安装失败，用下面的命令：
+
+```bash
+pip install fasttext-wheel
+```
+
+验证安装：查看已安装的包版本
+
+```bash
+pip show fasttext-wheel
+```
+
+
+
+### 5.1.4 模型架构
+
+fastText 的模型架构与 Word2Vec 中的 CBOW 模型非常相似，均为三层网络结构：**输入层、隐藏层、输出层**
+
+#### 5.1.4.1 整体结构
+
+**输入层**：把文本通过**N-gram**特征进行拆词，转成词向量
+
+**隐藏层**：将所有词向量**相加并取平均值**，得到该段文本的向量表示
+
+**输出层**：将文本向量输入线性分类器，通过 **层次Softmax** 函数输出各类别的概率分布。
+
+#### 5.1.4.2 数学公式
+
+假设文本包含 $N$ 个词，词向量维度为 $h$，类别数为 $K$。
+
+**隐藏层（文本表示）**：
+
+$$
+\mathbf{h} = \frac{1}{N} \sum_{i=1}^{N} \mathbf{v}_i
+$$
+
+其中 $\mathbf{v}_i \in \mathbb{R}^h$ 是第 $i$ 个词的词向量。
+
+**输出层（类别概率）**：
+
+$$
+\hat{y}_j = \frac{\exp(\mathbf{w}_j^\top \mathbf{h})}{\sum_{k=1}^{K} \exp(\mathbf{w}_k^\top \mathbf{h})}, \quad j = 1, 2, \dots, K
+$$
+
+其中 $\mathbf{w}_j \in \mathbb{R}^h$ 是第 $j$ 个类别的权重向量。
+
+**负对数似然损失**：
+
+$$
+\mathcal{L} = -\frac{1}{M} \sum_{m=1}^{M} \log \hat{y}_{c_m}
+$$
+
+其中 $M$ 是样本数，$c_m$ 是第 $m$ 个样本的真实类别。
+
+#### 5.1.4.3 N-gram 特征
+
+传统词袋模型无法保留词序信息。fastText 通过加入 N-gram 特征来解决这一问题
+
+例如：
+- “我 爱 她” 的词袋特征：{"我", "爱", "她"}
+- 加入 2-gram 后：{"我", "爱", "她", "我-爱", "爱-她"}
+
+这样 “我 爱 她” 和 “她 爱 我” 就能被区分开。同时使用 hash trick 进行特征降维，将原始特征空间通过 hash 函数映射到低维空间[reference:13]。
+
+#### 5.1.4.4 模型架构变量说明表
+
+|     变量名     |          含义           |             作用             | 形状  |
+| :------------: | :---------------------: | :--------------------------: | :---: |
+|      $N$       |      文本中的词数       |     参与平均的词向量数量     | 标量  |
+| $\mathbf{v}_i$ |   第 $i$ 个词的词向量   |        输入层的词表示        | $[h]$ |
+|  $\mathbf{h}$  |      文本表示向量       | 隐藏层输出，所有词向量的平均 | $[h]$ |
+| $\mathbf{w}_j$ | 第 $j$ 个类别的权重向量 |        线性分类器参数        | $[h]$ |
+|      $K$       |        类别数量         |      分类任务的类别总数      | 标量  |
+|      $h$       |       词向量维度        |          隐藏层维度          | 标量  |
+|  $\hat{y}_j$   |  预测为第 $j$ 类的概率  |         Softmax 输出         | 标量  |
+| $\mathcal{L}$  |     负对数似然损失      |         训练目标函数         | 标量  |
+
+#### 5.1.4.5 代码实现（PyTorch 简化版）
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class FastText(nn.Module):
+    def __init__(self, vocab_size, embed_dim, num_classes):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        self.fc = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, x):
+        # x: [batch_size, seq_len] 词索引
+        embedded = self.embedding(x)               # [batch, seq_len, embed_dim]
+        # 对序列维度取平均（忽略 padding 位置）
+        mask = (x != 0).unsqueeze(-1).float()       # [batch, seq_len, 1]
+        summed = (embedded * mask).sum(dim=1)       # [batch, embed_dim]
+        count = mask.sum(dim=1).clamp(min=1)        # [batch, 1]
+        text_repr = summed / count                   # [batch, embed_dim]
+        logits = self.fc(text_repr)                  # [batch, num_classes]
+        return logits
+
+# 使用示例
+vocab_size = 10000
+embed_dim = 100
+num_classes = 5
+model = FastText(vocab_size, embed_dim, num_classes)
+
+x = torch.randint(1, vocab_size, (4, 20))  # batch=4, seq_len=20
+logits = model(x)
+print(logits.shape)  # torch.Size([4, 5])
+```
+
+### 5.1.5 层次softmax
+
+#### 5.1.5.1 定义与概念
+
+层次 Softmax（Hierarchical Softmax）是一种用于加速大规模分类任务的技巧。当**类别数量 $K$** 非常大时，标准 Softmax 的计算复杂度为 $O(Kh)$（$h$ 为文本表示维度），计算代价过高。层次 Softmax 通过构建一棵**霍夫曼树（Huffman Tree）**，将计算复杂度降低到 $O(h \log_2 K)$
+
+#### 5.1.5.2 原理
+
+假设霍夫曼树中：
+
+- 叶子节点：代表类别，共有 $K$ 个
+- 内部节点：共有 $K-1$ 个
+- 对于目标类别 $c$，从根节点到叶子节点 $c$ 的路径长度为 $L(c)$，即路径上共有 $L(c)$ 个节点（包括根和叶子）
+- 路径上共有 $L(c) - 1$ 个**内部节点**（因为最后一个是叶子节点）
+- 路径上第 $j$ 个内部节点记为 $n_j$，$j = 1, 2, \dots, L(c)-1$
+
+对于路径上的第 $j$ 个内部节点 $n_j$，模型有一个参数向量 $\mathbf{w}_{n_j}$
+
+输入特征为 $\mathbf{x}$（文本表示向量），该节点的得分为：
+$$
+s_j = \mathbf{x}^\top \mathbf{w}_{n_j}
+$$
+
+通过 Sigmoid 函数，将该得分转换为概率：
+
+$$
+\sigma(s_j) = \frac{1}{1 + e^{-s_j}}
+$$
+
+含义：
+
+- $\sigma(s_j)$：从节点 $n_j$ 往**右**走的概率（对应霍夫曼编码为 1）
+- $1 - \sigma(s_j)$：从节点 $n_j$ 往**左**走的概率（对应霍夫曼编码为 0）
+
+霍夫曼编码 $d_j \in \{0, 1\}$ 表示第 $j$ 步的走向：
+
+- $d_j = 1$：向右走
+- $d_j = 0$：向左走
+
+**单步**概率可以统一写为：
+$$
+P_j = \sigma(s_j)^{d_j} \cdot \left(1 - \sigma(s_j)\right)^{1 - d_j}
+$$
+
+**验证**：
+
+- 当 $d_j = 1$ 时：$P_j = \sigma(s_j)^1 \cdot (1-\sigma(s_j))^0 = \sigma(s_j)$ ✓
+- 当 $d_j = 0$ 时：$P_j = \sigma(s_j)^0 \cdot (1-\sigma(s_j))^1 = 1 - \sigma(s_j)$ ✓
+
+这样用一个公式就同时表示了两种情况
+
+要从根节点走到叶子节点 $c$，需要依次完成 $L(c) - 1$ 次二分类决策
+
+由于每次决策独立（条件概率），所以整条路径的概率等于每步概率的乘积：
+$$
+P(c | \mathbf{x}) = \prod_{j=1}^{L(c)-1} P_j
+$$
+
+代入单步概率表达式：
+
+$$
+P(c | \mathbf{x}) = \prod_{j=1}^{L(c)-1} \sigma\left( \mathbf{x}^\top \mathbf{w}_{n_j} \right)^{d_j} \cdot \left(1 - \sigma\left( \mathbf{x}^\top \mathbf{w}_{n_j} \right)\right)^{1 - d_j}
+$$
+
+这就是层次 Softmax 的最终概率公式
+
+**计算复杂度**：从 $O(Kh)$ 降低到 $O(h \log_2 K)$。
+
+#### 5.1.5.3 变量说明表
+
+|       变量名       |             含义              |            作用             |
+| :----------------: | :---------------------------: | :-------------------------: |
+|        $c$         |           目标类别            |          叶子节点           |
+|    $\mathbf{x}$    |           输入特征            |    隐藏层输出的文本表示     |
+|       $L(c)$       |           路径长度            | 从根节点到类别 $c$ 的节点数 |
+| $\mathbf{w}_{n_j}$ | 第 $j$ 个非叶子节点的参数向量 |     决定路径方向的权重      |
+|      $\sigma$      |         Sigmoid 函数          |    将得分压缩到 $[0,1]$     |
+|       $d_j$        |        霍夫曼编码方向         |  0 或 1，指示走左或右子树   |
+|        $K$         |           类别总数            |        叶子节点数量         |
+|        $h$         |           特征维度            |     文本表示向量的维度      |
+
+#### 5.1.5.4 代码实现（简化示例）
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class HierarchicalSoftmax(nn.Module):
+    def __init__(self, hidden_dim, num_internal_nodes):
+        """
+        hidden_dim: 隐藏层维度
+        num_internal_nodes: 霍夫曼树内部节点数量
+        """
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        # 每个内部节点有一个参数向量
+        self.node_weights = nn.Parameter(torch.randn(num_internal_nodes, hidden_dim))
+
+    def forward(self, hidden, path_nodes, path_codes):
+        """
+        hidden: 文本表示向量, [batch, hidden_dim]
+        path_nodes: 每个样本对应的路径节点索引列表
+        path_codes: 每个样本对应的霍夫曼编码列表（0或1）
+        """
+        log_prob = 0.0
+        for node_idx, code in zip(path_nodes, path_codes):
+            score = torch.matmul(hidden, self.node_weights[node_idx])
+            if code == 1:
+                log_prob += F.logsigmoid(score)
+            else:
+                log_prob += F.logsigmoid(-score)
+        return log_prob
+```
+
+### 5.1.6 负采样
+
+#### 5.1.6.1 定义与概念
+
+负采样（Negative Sampling）是另一种加速 Softmax 的方法，它将多分类问题转化为多个二分类问题。
+
+具体来说：
+
+- 对于每一个**真实存在的（目标词，上下文词）对**，将其视为**正样本**，标签为 1。
+- 随机从词汇表中采样若干个**不存在的（目标词，上下文词）对**，将其视为**负样本**，标签为 0。
+- 训练模型区分正样本和负样本。
+
+这样，原本需要计算整个词汇表 Softmax 的问题，就变成了若干个二分类问题，计算量大幅降低。
+
+简单来说：负采样每次让一个训练样本仅仅**只更新一小部分的权重**，这样就会降低梯段下降的计算量。
+
+#### 5.1.6.2 公式推导与计算
+
+对于**正样本 $(w_t, w_c)$**，我们希望模型预测它为“真实对”的概率尽可能大。  
+
+使用 Sigmoid 函数将点积得分 $\mathbf{v}_{w_t}^\top \mathbf{v}_{w_c}$ 转换为概率：
+$$
+P(D = 1 | w_t, w_c) = \sigma(\mathbf{v}_{w_t}^\top \mathbf{v}_{w_c})
+$$
+
+其中 $D = 1$ 表示“是真实对”。
+
+**含义**：目标词与上下文词的向量越相似（点积越大），Sigmoid 输出越接近 1，表示模型越确信它们是真实对。
+
+
+
+对于**负样本 $(w_t, n)$**，我们希望模型预测它为“真实对”的概率尽可能小，即为“非真实对”的概率尽可能大：
+
+$$
+P(D = 0 | w_t, n) = 1 - \sigma(\mathbf{v}_{w_t}^\top \mathbf{v}_n)
+$$
+
+利用 Sigmoid 的性质 $1 - \sigma(x) = \sigma(-x)$，可以改写为：
+
+$$
+P(D = 0 | w_t, n) = \sigma(-\mathbf{v}_{w_t}^\top \mathbf{v}_n)
+$$
+
+**含义**：目标词与负样本词的向量越不相似（点积越小），$\sigma(-\text{点积})$ 越接近 1，表示模型越确信它们不是真实对。
+
+
+
+对于**正样本**，我们希望最大化：
+$$
+P(D = 1 | w_t, w_c) = \sigma(\mathbf{v}_{w_t}^\top \mathbf{v}_{w_c})
+$$
+
+对于**负样本**，我们希望最大化：
+
+$$
+P(D = 0 | w_t, n) = \sigma(-\mathbf{v}_{w_t}^\top \mathbf{v}_n)
+$$
+
+假设正样本和所有负样本之间相互独立，则联合似然为：
+
+$$
+L = \sigma(\mathbf{v}_{w_t}^\top \mathbf{v}_{w_c}) \cdot \prod_{n \in \mathcal{N}} \sigma(-\mathbf{v}_{w_t}^\top \mathbf{v}_n)
+$$
+
+对联合似然取对数：
+
+$$
+\log L = \log \sigma(\mathbf{v}_{w_t}^\top \mathbf{v}_{w_c}) + \sum_{n \in \mathcal{N}} \log \sigma(-\mathbf{v}_{w_t}^\top \mathbf{v}_n)
+$$
+
+在优化中，通常将最大化似然转化为最小化负对数似然：
+
+$$
+\mathcal{L} = -\log L = -\log \sigma(\mathbf{v}_{w_t}^\top \mathbf{v}_{w_c}) - \sum_{n \in \mathcal{N}} \log \sigma(-\mathbf{v}_{w_t}^\top \mathbf{v}_n)
+$$
+
+这就是负采样的最终损失函数。
+
+
+
+负样本的采样概率与词频的 $0.75$ 次方成正比：
+
+$$
+P(w) = \frac{\text{count}(w)^{0.75}}{\sum_{w'} \text{count}(w')^{0.75}}
+$$
+
+为什么用 0.75 次方？
+
+- 如果不加次方（即指数为 1），则高频词被采样为负样本的概率过高，导致模型过度关注区分高频词。
+- 如果指数太小（如 0），则退化为均匀采样，忽略了词频信息。
+- 实验发现 $0.75$ 是一个较好的折中：既考虑了词频，又避免高频词主导负样本。
+
+
+
+变量表格说明：
+
+|         变量名         |       含义       |                   作用                   |        维度         |
+| :--------------------: | :--------------: | :--------------------------------------: | :-----------------: |
+|         $w_t$          | 目标词（中心词） |             当前预测的中心词             |   标量（词索引）    |
+|         $w_c$          |     上下文词     |        与目标词共现的真实上下文词        |   标量（词索引）    |
+|          $n$           |     负样本词     |           随机采样的非上下文词           |   标量（词索引）    |
+|   $\mathbf{v}_{w_t}$   |    目标词向量    |             中心词的稠密表示             |        $[d]$        |
+|   $\mathbf{v}_{w_c}$   |   上下文词向量   |            上下文词的稠密表示            |        $[d]$        |
+|     $\mathbf{v}_n$     |   负样本词向量   |            负样本词的稠密表示            |        $[d]$        |
+|     $\mathcal{N}$      |    负样本集合    |          随机采样的负样本词集合          |   集合，大小 $K$    |
+|          $K$           |    负样本数量    |     超参数，每个正样本采样的负样本数     |        标量         |
+|        $\sigma$        |   Sigmoid 函数   |             将得分映射为概率             |      标量函数       |
+|         $s_+$          |    正样本得分    | $\mathbf{v}_{w_t}^\top \mathbf{v}_{w_c}$ |        标量         |
+|        $s_-^n$         |    负样本得分    |   $\mathbf{v}_{w_t}^\top \mathbf{v}_n$   |        标量         |
+| $P(D=1 \mid w_t, w_c)$ | 正样本为真的概率 |       模型预测正样本为真实对的概率       |        标量         |
+|  $P(D=0 \mid w_t, n)$  | 负样本为假的概率 |      模型预测负样本为非真实对的概率      |        标量         |
+|          $L$           |     联合似然     |         正样本和负样本的似然乘积         |        标量         |
+|     $\mathcal{L}$      |     损失函数     |           负对数似然，训练目标           |        标量         |
+|         $\eta$         |      学习率      |             控制参数更新步长             |        标量         |
+|   $\text{count}(w)$    |       词频       |        词 $w$ 在语料中的出现次数         |        标量         |
+|         $P(w)$         |     采样概率     |       词 $w$ 被采样为负样本的概率        |        标量         |
+|          $d$           |    词向量维度    |                 嵌入维度                 | 标量，如 100 或 300 |
+
+
+
+#### 5.1.6.3 与层次 Softmax 的对比
+
+|        特性        |     层次 Softmax     |          负采样          |
+| :----------------: | :------------------: | :----------------------: |
+|      适用场景      | 类别数极多（如数万） |     类别数中等或较多     |
+|     计算复杂度     |    $O(h \log K)$     |     $O(h \cdot neg)$     |
+|  是否依赖类别频率  |  是（构建霍夫曼树）  |      是（采样概率）      |
+| 是否适合不平衡数据 |         适合         |       可能效果较差       |
+|     测试时速度     |          快          | 慢（需计算完整 Softmax） |
+|   fastText 默认    |          是          |     可选（-loss ns）     |
+
+
+
+
+
+## 5.2 fasttext文本分类
+
+### 5.2.1 基本概念
+
+**fastText 文本分类**是一种基于浅层神经网络的**监督**学习方法，将文本映射到预定义的类别标签。
+
+其核心思想是：将文本中所有词的词向量求和取平均，得到文本表示，再通过线性分类器预测类别
+
+与深度学习模型相比，fastText 的优势在于**训练速度极快**，同时在许多标准分类任务上能达到与深度网络相媲美的精度
+
+
+
+fastText 文本分类支持以下两种模式：
+
+1. **单标签多分类（Multi-class Classification）**：从多个类别中预测**一个**类别。这是 fastText 的主要模式
+2. **多标签多分类（Multi-label Classification）**：一个样本可以属于**多个**类别。fastText 通过为每个标签独立计算损失来支持多标签分类。实际开发中转成多个二分类来解决
+
+**其他变体**：
+
+- **有监督分类**：使用带标签的数据训练分类器。
+- **无监督词向量训练**：不依赖标签，从原始语料中学习词向量。
+
+
+
+### 5.2.2 案例——用fastText对烹饪相关数据集进行文本分类
+
+![image-20260913210334163](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260913210334163.png)
+
+#### 5.2.2.1 数据说明
+
+![image-20260913210459441](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260913210459441.png)
+
+fastText 使用特定格式的文本文件进行训练，每行一个样本：
+
+```
+__label__positive 这个电影非常好看
+__label__negative 剧情太差了
+```
+
+标签以 `__label__` 前缀标识，后跟类别名称，然后是文本内容。
+
+
+
+#### 5.2.2.2 直接训练
+
+```python
+def dm01_basic():
+    # 1. 获取训练模型(有监督训练: 有特征, 有标签) -> 得到训练好的模型.
+    model = fasttext.train_supervised('./data/cooking_train.txt')
+
+    # 2. 使用模型进行预测.
+    # 预测第1条样本.
+    result1 = model.predict('How is mass egg-frying performed?')
+    print(f'result1的预测结果为: {result1}')
+
+    # 预测第2条样本
+    result2 = model.predict('Using liquid nitrogen for tenderizing octopus?')
+    print(f'result2的预测结果为: {result2}')
+
+
+    # 3. 测试模型(看看日志)
+    result3 = model.test('./data/cooking_valid.txt')
+    print(f'模型在测试集上的测试结果: {result3}')       # [验证集样本数量, 精度(准确率), 召回率]
+
+```
+
+结论：速度很快，但是准确率只有13%左右
+
+#### 5.2.2.3 优化1——数据预处理
+
+原文中存在 标点符号和单词相连 和 大小写不统一 ，增加了模型提取分类规律的难度
+
+因此对数据进行预处理
+
+```python
+# 2. 对数据做预处理 -> 统一小写, 符号和单词分离...
+def preprocess_fasttext(input_path, output_path):
+    """
+    对 FastText 格式文本进行预处理：
+    1. 保留标签部分（__label__xxx）不变
+    2. 对文本部分：字母转小写，单词与标点符号之间加空格
+    3. 规范化多余空格
+    """
+    with open(input_path, 'r', encoding='utf-8') as fin, \
+         open(output_path, 'w', encoding='utf-8') as fout:
+        
+        for line in fin:
+            line = line.strip()
+            if not line:
+                continue  # 跳过空行
+            
+            # 分割标签和文本。FastText 格式通常以 __label__ 开头，第一个空格后是文本
+            parts = line.split(' ', 1)
+            if len(parts) == 2:
+                label, text = parts
+            else:
+                # 如果只有标签没有文本，直接写入
+                fout.write(line + '\n')
+                continue
+            
+            # 1. 文本转小写
+            text = text.lower()
+            
+            # 2. 在标点符号前后加空格
+            # 匹配非字母、非数字、非空白的字符（即标点），在其前后加空格
+            text = re.sub(r'([^\w\s])', r' \1 ', text)
+            
+            # 3. 将连续多个空格合并为一个，并去除首尾空格
+            text = ' '.join(text.split())
+            
+            # 4. 重新组合并写入
+            fout.write(f"{label} {text}\n")
+    
+    print(f"处理完成！结果已保存到 {output_path}")
+
+
+def dm02_data_preprocess():
+    # 数据预处理
+    input_file = './QianYi/data/cooking_train.txt'
+    output_file = './QianYi/data/cooking_pre_test.txt'
+    preprocess_fasttext(input_file, output_file)
+
+    # 1. 获取训练模型(有监督训练: 有特征, 有标签) -> 得到训练好的模型.
+    model = fasttext.train_supervised('./QianYi/data/cooking_pre_test.txt')
+
+    # 2. 使用模型进行预测.
+    # 预测第1条样本.
+    result1 = model.predict('how is mass egg-frying performed ?')
+    print(f'result1的预测结果为: {result1}')
+
+    # 预测第2条样本
+    result2 = model.predict('using liquid nitrogen for tenderizing octopus ?')
+    print(f'result2的预测结果为: {result2}')
+
+
+    # 3. 测试模型(看看日志)
+    result3 = model.test('./QianYi/data/cooking_pre_test.txt')
+    print(f'模型在测试集上的测试结果: {result3}')       # [验证集样本数量, 精度(准确率), 召回率]
+
+```
+
+结论：速度很快，准确率从13% ==> 17%
+
+
+
+#### 5.2.2.4 优化2——调整参数
+
+常用调参策略：
+
+- 调整 `lr`（学习率）：通常在 0.1 到 1.0 之间。
+- 调整 `epoch`：5 到 50 轮。
+- 调整 `wordNgrams`：2 到 5。
+- 调整 `dim`：50 到 300。
+- 选择损失函数：`softmax`、`hierarchicalSoftmax` 或 `ns`。
+
+```python
+def dm06_loss():
+    # 1. 获取训练模型(有监督训练: 有特征, 有标签) -> 得到训练好的模型.
+    model = fasttext.train_supervised('./QianYi/data/cooking_pre_test.txt' , epoch=30, lr = 0.3, wordNgrams=1, loss='hs')
+    
+    # 2. 使用模型进行预测.
+    # 预测第1条样本.
+    result1 = model.predict('how is mass egg-frying performed ?')
+    print(f'result1的预测结果为: {result1}')
+    
+    # 预测第2条样本
+    result2 = model.predict('using liquid nitrogen for tenderizing octopus ?')
+    print(f'result2的预测结果为: {result2}')
+    
+    # 3. 测试模型(看看日志)
+    result3 = model.test('./QianYi/data/cooking_pre_test.txt')
+    print(f'模型在测试集上的测试结果: {result3}')
+
+```
+
+
+
+#### 5.2.2.5 优化——自动超参数调优
+
+```python
+def dm07_auto():
+
+    # 1. 获取训练模型(有监督训练: 有特征, 有标签) -> 得到训练好的模型.
+    model = fasttext.train_supervised(
+        input='./QianYi/data/cooking.pre.train',                       # 指定 训练集的 路径.
+        autotuneValidationFile='./QianYi/data/cooking.pre.valid',      # 指定 验证集的 路径.
+        autotuneDuration=180,                                   # 自动调参的时长限制, 默认: 5分钟, 这里改为: 3分钟.
+    )
+
+    # 2. 使用模型进行预测.
+    # 预测第1条样本.
+    result1 = model.predict('how is mass egg-frying performed ?')
+    print(f'result1的预测结果为: {result1}')
+
+    # 预测第2条样本
+    result2 = model.predict('using liquid nitrogen for tenderizing octopus ?')
+    print(f'result2的预测结果为: {result2}')
+
+    # 3. 测试模型(看看日志)
+    result3 = model.test('./QianYi/data/cooking.pre.valid')
+    print(f'模型在测试集上的测试结果: {result3}')  # [验证集样本数量, 精度(准确率), 召回率]
+
+```
+
+
+
+#### 5.2.2.6 多分类问题
+
+
+
+
+
+#### 5.2.3.8 完整实战示例
+
+```python
+import fasttext
+import os
+
+# 1. 准备数据
+# 假设已有 train.txt 和 test.txt，格式为：
+# __label__positive 这个电影非常好看
+# __label__negative 剧情太差了
+
+# 2. 训练模型
+model = fasttext.train_supervised(
+    input="train.txt",
+    lr=0.5,
+    epoch=25,
+    wordNgrams=2,
+    dim=100,
+    loss="softmax"
+)
+
+# 3. 评估
+result = model.test("test.txt")
+print(f"样本数: {result[0]}, 精确率: {result[1]:.4f}, 召回率: {result[2]:.4f}")
+
+# 4. 预测
+texts = ["这个电影真不错", "剧情太无聊了", "演员表现很棒"]
+for text in texts:
+    labels, probs = model.predict(text, k=1)
+    print(f"文本: {text} -> 预测: {labels[0]}, 概率: {probs[0]:.4f}")
+
+# 5. 保存模型
+model.save_model("sentiment_model.bin")
+
+# 6. 加载模型
+loaded_model = fasttext.load_model("sentiment_model.bin")
+print(loaded_model.predict("很好看"))
+```
+
+---
+
+
+
+## 5.3 fasttext词向量迁移
+
+### 5.3.1 概念
+
+词向量迁移（Word Vector Transfer）是迁移学习在 NLP 中的一种应用。其核心思想是：在**大规模无监督语料**上预先训练好词向量，然后将这些词向量**迁移到下游任务**中，作为词嵌入的初始化或固定表示，从而减少对大量标注数据的依赖[reference:26]。
+
+fastText 的词向量具有**子词（subword）信息**，能够为未登录词（OOV）生成合理的向量表示，特别适合低资源、小样本场景[reference:27]。
+
+### 5.3.2 过程
+
+#### 5.3.2.1 迁移学习的两种策略
+
+| 策略                   | 做法                                 | 适用场景         |
+| ---------------------- | ------------------------------------ | ---------------- |
+| **固定向量（Frozen）** | 预训练词向量作为固定特征，不参与训练 | 下游数据非常小   |
+| **微调（Fine-tune）**  | 预训练词向量作为初始化，继续训练     | 下游数据规模较大 |
+
+#### 5.3.2.2 完整迁移步骤
+
+**第一步：下载预训练词向量模型**[reference:28]
+
+fastText 官方提供多种语言的预训练词向量：
+
+```bash
+# 中文词向量（300维）
+wget https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.zh.300.bin.gz
+
+# 英文词向量（300维）
+wget https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.en.300.bin.gz
+```
+
+**第二步：解压 bin.gz 文件**
+
+```bash
+gunzip cc.zh.300.bin.gz
+```
+
+**第三步：加载模型并获取词向量**[reference:29]
+
+```python
+import fasttext
+
+# 加载预训练模型
+ft_model = fasttext.load_model("cc.zh.300.bin")
+
+# 获取单个词的向量
+vector = ft_model.get_word_vector("自然语言处理")
+print(vector.shape)  # (300,)
+
+# 获取邻近词（用于效果检验）
+neighbors = ft_model.get_nearest_neighbors("自然语言处理", k=5)
+for score, word in neighbors:
+    print(f"{word}: {score:.4f}")
+```
+
+**第四步：构建词嵌入矩阵**
+
+```python
+import torch
+import torch.nn as nn
+
+def build_embedding_matrix(ft_model, word2idx, embed_dim=300):
+    """
+    从 fastText 模型构建 PyTorch 嵌入矩阵
+    word2idx: 词汇表 {word: index}
+    """
+    vocab_size = len(word2idx)
+    embedding_matrix = torch.zeros(vocab_size, embed_dim)
+
+    for word, idx in word2idx.items():
+        if word in ft_model.words:
+            embedding_matrix[idx] = torch.tensor(ft_model.get_word_vector(word))
+        else:
+            # 对于 OOV 词，fastText 可以基于子词生成向量
+            embedding_matrix[idx] = torch.tensor(ft_model.get_word_vector(word))
+
+    return embedding_matrix
+```
+
+**第五步：迁移到下游任务**
+
+```python
+class TextClassifier(nn.Module):
+    def __init__(self, embedding_matrix, num_classes, freeze=False):
+        super().__init__()
+        vocab_size, embed_dim = embedding_matrix.shape
+        self.embedding = nn.Embedding.from_pretrained(
+            embedding_matrix,
+            freeze=freeze  # True 表示固定词向量，False 表示微调
+        )
+        self.fc = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, x):
+        # x: [batch, seq_len]
+        embedded = self.embedding(x)          # [batch, seq_len, embed_dim]
+        # 对序列维度取平均
+        text_repr = embedded.mean(dim=1)      # [batch, embed_dim]
+        return self.fc(text_repr)             # [batch, num_classes]
+
+# 使用示例
+# 假设 word2idx 已构建，embedding_matrix 已生成
+# model = TextClassifier(embedding_matrix, num_classes=5, freeze=False)
+```
+
+#### 5.3.2.3 迁移 fastText 词向量的优势
+
+1. **对 OOV 友好**：fastText 的子词特性使罕见词也能获得合理的向量表示[reference:30]。
+2. **迁移高效**：二进制模型通常几十 MB，易于部署[reference:31]。
+3. **多语言适配**：fastText 有丰富的多语言预训练模型，迁移到少数语种更容易[reference:32]。
+4. **下游任务表现更稳**：相比从零训练，更容易收敛，且在小数据集上表现更好[reference:33]。
+
+#### 5.3.2.4 常用 API 参数表
+
+| API 方法                       | 参数                   | 含义               | 作用                   |
+| ------------------------------ | ---------------------- | ------------------ | ---------------------- |
+| `fasttext.load_model`          | `path`                 | 模型文件路径       | 加载预训练模型         |
+| `model.get_word_vector`        | `word`                 | 词字符串           | 获取词的向量表示       |
+| `model.get_nearest_neighbors`  | `word`, `k`            | 词、近邻数量       | 获取最相似的 k 个词    |
+| `model.get_sentence_vector`    | `text`                 | 句子字符串         | 获取句子的向量表示     |
+| `nn.Embedding.from_pretrained` | `embeddings`, `freeze` | 嵌入矩阵、是否固定 | 从预训练向量创建嵌入层 |
+
+#### 5.3.2.5 完整迁移实战示例
+
+```python
+import fasttext
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+# ========== 1. 加载预训练词向量 ==========
+ft_model = fasttext.load_model("cc.zh.300.bin")
+
+# ========== 2. 构建词汇表 ==========
+word2idx = {"<pad>": 0, "<unk>": 1}
+for word in ft_model.words[:10000]:  # 取前 10000 个词
+    word2idx[word] = len(word2idx)
+
+# ========== 3. 构建嵌入矩阵 ==========
+embed_dim = 300
+vocab_size = len(word2idx)
+embedding_matrix = torch.zeros(vocab_size, embed_dim)
+
+for word, idx in word2idx.items():
+    if word == "<pad>":
+        continue
+    embedding_matrix[idx] = torch.tensor(ft_model.get_word_vector(word))
+
+print(f"嵌入矩阵形状: {embedding_matrix.shape}")
+
+# ========== 4. 定义分类模型 ==========
+class SentimentClassifier(nn.Module):
+    def __init__(self, embedding_matrix, num_classes=2, freeze=False):
+        super().__init__()
+        self.embedding = nn.Embedding.from_pretrained(
+            embedding_matrix, freeze=freeze, padding_idx=0
+        )
+        self.fc = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, x):
+        embedded = self.embedding(x)
+        text_repr = embedded.mean(dim=1)
+        return self.fc(text_repr)
+
+# ========== 5. 训练与评估 ==========
+model = SentimentClassifier(embedding_matrix, num_classes=2, freeze=False)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+# 模拟数据
+x_train = torch.randint(1, vocab_size, (32, 50))
+y_train = torch.randint(0, 2, (32,))
+
+for epoch in range(10):
+    model.train()
+    optimizer.zero_grad()
+    logits = model(x_train)
+    loss = criterion(logits, y_train)
+    loss.backward()
+    optimizer.step()
+    print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
+```
+
+---
+
+## 5.4 总结
+
+| 模块              | 核心要点                                                     |
+| ----------------- | ------------------------------------------------------------ |
+| **fastText 工具** | 高效文本分类和词向量训练工具，训练速度极快，支持 N-gram 和子词信息 |
+| **模型架构**      | 三层网络：输入层（词向量 + N-gram）、隐藏层（平均）、输出层（分类器） |
+| **层次 Softmax**  | 基于霍夫曼树，将复杂度从 $O(Kh)$ 降到 $O(h \log K)$          |
+| **负采样**        | 将多分类转化为二分类，采样概率与词频的 0.75 次方成正比       |
+| **文本分类**      | 监督学习，支持多类别和多标签，使用 `__label__` 格式数据      |
+| **词向量迁移**    | 在大规模语料上预训练，迁移到下游任务，支持固定和微调两种策略 |
+
+fastText 以其**简单、高效、实用**的特点，在工业界得到了广泛应用，是 NLP 学习者和实践者必须掌握的重要工具。
 
 
 
