@@ -440,6 +440,252 @@ codex
 
 
 
+# 九、Obsidian安装
+
+## 9.1 下载与安装
+
+官网：https://obsidian.md/
+
+打开官网直接安装
+
+![image-20260916074953266](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260916074953266.png)
+
+双击安装包进行安装，选择合适的下载位置：
+
+![image-20260916082257707](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260916082257707.png)
+
+下载好后打开
+
+## 9.2 简单配置
+
+点击创建仓库
+
+![image-20260916082734670](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260916082734670.png)
+
+选择合适的位置
+
+![image-20260916082833851](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260916082833851.png)
+
+
+
+进去之后选择设置
+
+![image-20260917161638943](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917161638943.png)
+
+
+
+
+
+
+
+# 十、codex + obsidian + zetero实现论文辅助
+
+## 10.1 前置安装
+
+codex的安装参考**八、**
+
+obsidian的安装参考**九、**
+
+zetero的安装参考B站：https://www.bilibili.com/video/BV1RkyBBVE3f/?spm_id_from=333.337.search-card.all.click&vd_source=24c1e92bdfe1c6a0f1b228cda0583ac9
+
+
+
+`MinerU`：是一个开源的 PDF 解析工具，可以本地部署
+
+打开命令行，执行以下命令创建一个沙箱：
+
+```bash
+conda create -n MinerU python=3.11
+conda activate MinerU
+```
+
+然后执行安装命令：
+
+```bash
+pip install -U pip uv
+uv pip install -U "mineru[all]"
+```
+
+![image-20260918122350044](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260918122350044.png)
+
+检查是否安装成功：
+
+```bash
+pip show mineru
+mineru --version
+```
+
+
+
+![image-20260918122844313](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260918122844313.png)
+
+要让 Codex 调用这个本地 MinerU，需要通过 **MCP (Model Context Protocol)** 进行集成。以下是完整步骤：
+
+在MinerU 沙箱中：
+
+```bash
+pip install mineru-mcp-server
+```
+
+
+
+![image-20260918123427498](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260918123427498.png)
+
+
+
+## 10.2 skill下载
+
+我们要用到的两个skill都来自开发者 `cheneternity` 的仓库
+
+这两个技能都**强烈依赖一个特定的本地目录结构**，默认路径为 `D:\ResearchVault`
+
+如果在下载前修改路径会比较麻烦，所以我们先在D盘创建相对应的路径
+
+```bash
+mkdir D:\ResearchVault
+mkdir D:\ResearchVault\note
+mkdir D:\ResearchVault\模板
+```
+
+
+
+![image-20260917220106898](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917220106898.png)
+
+
+
+打开`命令行`，执行：
+
+```bash
+npx skills add https://github.com/cheneternity/Zotero-Analytical-Workflow-Skills --all -g -a codex
+```
+
+这个命令安装的skill会下载到`C:\Users\<你的用户名>\.codex\skills\`，可以全局执行
+
+安装如下：
+
+![image-20260917220817416](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917220817416.png)
+
+skill安装成功，失败的是 **Eve** 和 **PromptScript** 这两个 agent，原因是它们**不支持全局技能安装**。这和你使用的 Codex 完全无关，不影响 Codex 使用这些技能。
+
+
+
+## 10.3 工具配置
+
+### 10.3.1 Obsidian
+
+然后来到`Obsidian`，选择我们最开始创建的 `D:\ResearchVault`
+
+![image-20260917221112446](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917221112446.png)
+
+![image-20260917221217519](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917221217519.png)
+
+
+
+### 10.3.2 Zetero
+
+来到Zetero，打开设置，其实这个目录不影响，但是默认存C盘有些占空间
+
+![image-20260917221822746](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917221822746.png)
+
+选择你要换的文件夹，换完之后会要求你重启
+
+![image-20260917221911636](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917221911636.png)
+
+
+
+### 10.3.3 Codex
+
+打开codex，点击左上角，切换成Codex（因为GPT和Codex公用一个桌面端），点击项目创建
+
+![image-20260917222832512](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917222832512.png)
+
+选择我们之前创建的 `D:\ResearchVault`
+
+![image-20260917223102623](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917223102623.png)
+
+
+
+
+
+## 10.4 skill使用
+
+先将论文导入到Zetero中，可以创建一个分类，导入一个期刊文章，这里做测试
+
+![image-20260917223631879](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917223631879.png)
+
+然后导入我们的pdf文件
+
+![image-20260917223757993](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917223757993.png)
+
+打开翻译软件，可以先对纯英文的论文进行翻译，得到中文版本
+
+![image-20260917223955974](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917223955974.png)
+
+![image-20260917225929883](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917225929883.png)
+
+
+
+得到中文版本，和双语对照版本的pdf
+
+![image-20260917230342960](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917230342960.png)
+
+
+
+然后在Codex中输出。效果如下：
+
+![image-20260918104701729](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260918104701729.png)
+
+
+
+由于之前忘记装插件了，装好插件后，再次用codex整理
+
+![image-20260918130603541](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260918130603541.png)
+
+
+
+目录说明：
+
+- **全文归档**：`D:\ResearchVault\03fulltext\智能语音\AQIFVCXT.md`
+- **精读笔记**：`D:\ResearchVault\note\智能语音\模型压缩和知识蒸馏的语音模型.md`
+
+
+
+
+
+## 10.5 插件版本过低解决
+
+Zetero上来给我自动更新了....打开Zetero说插件版本太低
+
+![image-20260917224627513](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917224627513.png)
+
+来到插件商店：https://zotero-chinese.com/plugins/#search=Zotero+Pdf2zh
+
+下载最新的
+
+![image-20260917224744903](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917224744903.png)
+
+来到你的插件位置：`E:\zotero\2025_10_pdf2zh`
+
+将你刚下载的内容把这里的替换掉
+
+![image-20260917224941671](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917224941671.png)
+
+
+
+然后来检查一下更新就行了
+
+![image-20260917225839250](https://cdn.jsdelivr.net/gh/Ldaylight/typora-image-bed//Typoraimage-20260917225839250.png)
+
+
+
+
+
+
+
+
+
+
+
 
 
 
