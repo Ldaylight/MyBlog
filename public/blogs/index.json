@@ -1,5 +1,14 @@
 [
   {
+    "slug": "NeuralNetwork",
+    "title": "神经网络基础",
+    "tags": [],
+    "date": "2026-09-26T12:57",
+    "summary": "",
+    "hidden": false,
+    "category": ""
+  },
+  {
     "slug": "KMeans",
     "title": "KMeans算法",
     "tags": [],
