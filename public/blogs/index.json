@@ -1,5 +1,14 @@
 [
   {
+    "slug": "paper-1",
+    "title": "模型压缩和知识蒸馏的语音模型",
+    "tags": [],
+    "date": "2026-09-28T12:21",
+    "summary": "",
+    "hidden": false,
+    "category": ""
+  },
+  {
     "slug": "distillation",
     "title": "知识蒸馏",
     "tags": [],
