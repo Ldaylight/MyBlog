@@ -1,5 +1,14 @@
 [
   {
+    "slug": "distillation",
+    "title": "知识蒸馏",
+    "tags": [],
+    "date": "2026-09-28T09:44",
+    "summary": "",
+    "hidden": false,
+    "category": ""
+  },
+  {
     "slug": "fine-tune",
     "title": "大模型微调",
     "tags": [],
