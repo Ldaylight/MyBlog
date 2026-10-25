@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils'
 import { useSize } from '@/hooks/use-size'
 import { useConfigStore } from '@/app/(home)/stores/config-store'
 import { HomeDraggableLayer } from '@/app/(home)/home-draggable-layer'
+import { Radar } from 'lucide-react'
 
 const list = [
 	{
@@ -54,6 +55,12 @@ const list = [
 		iconActive: WebsiteFilledSVG,
 		label: '优秀博客',
 		href: '/bloggers'
+	},
+	{
+		icon: Radar,
+		iconActive: Radar,
+		label: 'Codex 雷达',
+		href: '/radar'
 	}
 ]
 
@@ -64,7 +71,12 @@ export default function NavCard() {
 	const center = useCenterStore()
 	const [show, setShow] = useState(false)
 	const { maxSM } = useSize()
-	const [hoveredIndex, setHoveredIndex] = useState<number>(0)
+	const [hoveredIndex, setHoveredIndex] = useState(() =>
+		Math.max(
+			0,
+			list.findIndex(item => pathname === item.href)
+		)
+	)
 	const { siteContent, cardStyles } = useConfigStore()
 	const styles = cardStyles.navCard
 	const hiCardStyles = cardStyles.hiCard
@@ -86,6 +98,8 @@ export default function NavCard() {
 	if (maxSM) form = 'icons'
 
 	const itemHeight = form === 'full' ? 52 : 28
+	const compactWidth = maxSM ? Math.min(376, Math.max(280, center.width - 24)) : 376
+	const iconGap = (compactWidth - 24 - 40 - list.length * 28) / list.length
 
 	let position = useMemo(() => {
 		if (form === 'full') {
@@ -102,9 +116,9 @@ export default function NavCard() {
 
 	const size = useMemo(() => {
 		if (form === 'mini') return { width: 64, height: 64 }
-		else if (form === 'icons') return { width: 340, height: 64 }
+		else if (form === 'icons') return { width: compactWidth, height: 64 }
 		else return { width: styles.width, height: styles.height }
-	}, [form, styles])
+	}, [form, styles, compactWidth])
 
 	useEffect(() => {
 		if (form === 'icons' && activeIndex !== undefined && hoveredIndex !== activeIndex) {
@@ -126,7 +140,7 @@ export default function NavCard() {
 					height={size.height}
 					x={position.x}
 					y={position.y}
-					className={clsx(form != 'full' && 'overflow-hidden', form === 'mini' && 'p-3', form === 'icons' && 'flex items-center gap-6 p-3')}>
+					className={clsx(form != 'full' && 'overflow-hidden', form === 'mini' && 'p-3', form === 'icons' && 'flex items-center p-3')}>
 					{form === 'full' && siteContent.enableChristmas && (
 						<>
 							<img
@@ -138,7 +152,7 @@ export default function NavCard() {
 						</>
 					)}
 
-					<Link className='flex items-center gap-3' href='/'>
+					<Link className='flex shrink-0 items-center gap-3' href='/' aria-label='返回首页' style={form === 'icons' ? { marginRight: iconGap } : undefined}>
 						<Image src='/images/avatar.png' alt='avatar' width={40} height={40} style={{ boxShadow: ' 0 12px 20px -5px #E2D9CE' }} className='rounded-full' />
 						{form === 'full' && <span className='font-averia mt-1 text-2xl leading-none font-medium'>{siteContent.meta.title}</span>}
 						{form === 'full' && <span className='text-brand mt-2 text-xs font-medium'>(开发中)</span>}
@@ -148,7 +162,9 @@ export default function NavCard() {
 						<>
 							{form !== 'icons' && <div className='text-secondary mt-6 text-sm uppercase'>General</div>}
 
-							<div className={cn('relative mt-2 space-y-2', form === 'icons' && 'mt-0 flex items-center gap-6 space-y-0')}>
+							<div
+								className={cn('relative mt-2 space-y-2', form === 'icons' && 'mt-0 flex items-center space-y-0')}
+								style={form === 'icons' ? { gap: iconGap } : undefined}>
 								<motion.div
 									className='absolute max-w-[230px] rounded-full border'
 									layoutId='nav-hover'
@@ -156,7 +172,7 @@ export default function NavCard() {
 									animate={
 										form === 'icons'
 											? {
-													left: hoveredIndex * (itemHeight + 24) - extraSize,
+													left: hoveredIndex * (itemHeight + iconGap) - extraSize,
 													top: -extraSize,
 													width: itemHeight + extraSize * 2,
 													height: itemHeight + extraSize * 2
@@ -175,6 +191,10 @@ export default function NavCard() {
 									<Link
 										key={item.href}
 										href={item.href}
+										aria-label={item.label}
+										title={item.label}
+										aria-current={pathname === item.href ? 'page' : undefined}
+										onFocus={() => setHoveredIndex(index)}
 										className={cn('text-secondary text-md relative z-10 flex items-center gap-3 rounded-full px-5 py-3', form === 'icons' && 'p-0')}
 										onMouseEnter={() => setHoveredIndex(index)}>
 										<div className='flex h-7 w-7 items-center justify-center'>

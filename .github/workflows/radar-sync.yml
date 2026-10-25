@@ -1,0 +1,45 @@
+name: Sync Codex radar
+
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codex-radar-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/cache@v4
+        with:
+          path: data/radar-monitor-state.json
+          key: radar-state-v1-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: radar-state-v1-${{ github.ref_name }}-
+      - name: Fetch announcements
+        env:
+          RADAR_SYNC_MODE: ${{ vars.RADAR_SYNC_MODE || 'upstream' }}
+          RADAR_X_ACCOUNTS: ${{ vars.RADAR_X_ACCOUNTS || 'thsottiaux' }}
+          RADAR_OPENAI_MODEL: ${{ vars.RADAR_OPENAI_MODEL }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node --experimental-strip-types scripts/sync-radar.mjs
+      - name: Save changed history
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add public/radar/events.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Update Codex radar records'
+          git pull --rebase
+          git push

@@ -28,6 +28,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 			lastModified: new Date(),
 			changeFrequency: 'daily',
 			priority: 1
+		},
+		{
+			url: `${baseUrl}/radar`,
+			changeFrequency: 'daily',
+			priority: 0.6
 		}
 	]
 
