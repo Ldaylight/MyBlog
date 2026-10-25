@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { motion } from 'motion/react'
 import { toast } from 'sonner'
 import { useMarkdownRender } from '@/hooks/use-markdown-render'
-import { pushAbout, type AboutData } from './services/push-about'
+import type { AboutData } from './services/push-about'
 import { useAuthStore } from '@/hooks/use-auth'
 import { useConfigStore } from '@/app/(home)/stores/config-store'
 import LikeButton from '@/components/like-button'
@@ -52,6 +52,7 @@ export default function Page() {
 		setIsSaving(true)
 
 		try {
+			const { pushAbout } = await import('./services/push-about')
 			await pushAbout(data)
 
 			setOriginalData(data)

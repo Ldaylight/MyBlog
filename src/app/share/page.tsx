@@ -4,13 +4,14 @@ import { useState, useRef, useEffect } from 'react'
 import { motion } from 'motion/react'
 import { toast } from 'sonner'
 import GridView from './grid-view'
-import CreateDialog from './components/create-dialog'
-import { pushShares } from './services/push-shares'
+import dynamic from 'next/dynamic'
 import { useAuthStore } from '@/hooks/use-auth'
 import { useConfigStore } from '@/app/(home)/stores/config-store'
 import initialList from './list.json'
 import type { Share } from './components/share-card'
 import type { LogoItem } from './components/logo-upload-dialog'
+
+const CreateDialog = dynamic(() => import('./components/create-dialog'))
 
 export default function Page() {
 	const [shares, setShares] = useState<Share[]>(initialList as Share[])
@@ -87,6 +88,7 @@ export default function Page() {
 		setIsSaving(true)
 
 		try {
+			const { pushShares } = await import('./services/push-shares')
 			const updatedShares = await pushShares({
 				shares,
 				logoItems

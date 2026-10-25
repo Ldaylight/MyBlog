@@ -4,12 +4,13 @@ import { useState, useRef, useEffect } from 'react'
 import { motion } from 'motion/react'
 import { toast } from 'sonner'
 import { ProjectCard, type Project } from './components/project-card'
-import CreateDialog from './components/create-dialog'
-import { pushProjects } from './services/push-projects'
+import dynamic from 'next/dynamic'
 import { useAuthStore } from '@/hooks/use-auth'
 import { useConfigStore } from '@/app/(home)/stores/config-store'
 import initialList from './list.json'
 import type { ImageItem } from './components/image-upload-dialog'
+
+const CreateDialog = dynamic(() => import('./components/create-dialog'))
 
 export default function Page() {
 	const [projects, setProjects] = useState<Project[]>(initialList as Project[])
@@ -79,6 +80,7 @@ export default function Page() {
 		setIsSaving(true)
 
 		try {
+			const { pushProjects } = await import('./services/push-projects')
 			await pushProjects({
 				projects,
 				imageItems

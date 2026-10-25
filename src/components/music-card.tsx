@@ -53,6 +53,7 @@ export default function MusicCard() {
 	useEffect(() => {
 		if (!audioRef.current) {
 			audioRef.current = new Audio()
+			audioRef.current.preload = 'none'
 		}
 
 		const audio = audioRef.current

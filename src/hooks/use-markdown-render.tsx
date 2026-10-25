@@ -17,11 +17,12 @@ export function useMarkdownRender(markdown: string): MarkdownRenderResult {
 
 	useEffect(() => {
 		let cancelled = false
+		const controller = new AbortController()
 
 		async function render() {
 			setLoading(true)
 			try {
-				const { html, toc } = await renderMarkdown(markdown)
+				const { html, toc } = await renderMarkdown(markdown, controller.signal)
 				if (!cancelled) {
 					// Extract pre elements and replace with placeholders before parsing
 					const codeBlocks: Array<{ placeholder: string; code: string; preHtml: string }> = []
@@ -52,25 +53,23 @@ export function useMarkdownRender(markdown: string): MarkdownRenderResult {
 							// Handle code block placeholders in text nodes
 							if (domNode.type === 'text' && domNode.data && domNode.data.includes('__CODE_BLOCK_')) {
 								const text = domNode.data
-								const result = text
-												.split(/(__CODE_BLOCK_\d+__)/)
-												.filter(Boolean);
+								const result = text.split(/(__CODE_BLOCK_\d+__)/).filter(Boolean)
 
 								return (
 									<>
 										{result.map((item, index) => {
-											if(item.startsWith('__CODE_BLOCK_')){
+											if (item.startsWith('__CODE_BLOCK_')) {
 												const block = codeBlocks.find(b => b.placeholder === item)
-												if(block){
+												if (block) {
 													const preElement = parse(block.preHtml) as ReactElement
 													return (
-														<CodeBlock key={block.placeholder} code={block.code}>{preElement}</CodeBlock>
+														<CodeBlock key={block.placeholder} code={block.code}>
+															{preElement}
+														</CodeBlock>
 													)
 												}
-											}else{
-												return item
-													? <Fragment key={index}>{item}</Fragment>
-													: null
+											} else {
+												return item ? <Fragment key={index}>{item}</Fragment> : null
 											}
 										})}
 									</>
@@ -83,8 +82,8 @@ export function useMarkdownRender(markdown: string): MarkdownRenderResult {
 					setToc(toc)
 				}
 			} catch (error) {
-				console.error('Markdown render error:', error)
 				if (!cancelled) {
+					console.error('Markdown render error:', error)
 					setContent(null)
 					setToc([])
 				}
@@ -99,6 +98,7 @@ export function useMarkdownRender(markdown: string): MarkdownRenderResult {
 
 		return () => {
 			cancelled = true
+			controller.abort()
 		}
 	}, [markdown])
 

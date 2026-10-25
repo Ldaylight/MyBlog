@@ -2,9 +2,8 @@
 
 import Card from '@/components/card'
 import Image from 'next/image'
-import Link from 'next/link'
+import Link, { useLinkStatus } from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
-import { motion } from 'motion/react'
 import { useCenterStore } from '@/hooks/use-center'
 import { CARD_SPACING } from '@/consts'
 import ScrollOutlineSVG from '@/svgs/scroll-outline.svg'
@@ -23,7 +22,7 @@ import { cn } from '@/lib/utils'
 import { useSize } from '@/hooks/use-size'
 import { useConfigStore } from '@/app/(home)/stores/config-store'
 import { HomeDraggableLayer } from '@/app/(home)/home-draggable-layer'
-import { Radar } from 'lucide-react'
+import { LoaderCircle, Radar } from 'lucide-react'
 
 const list = [
 	{
@@ -66,17 +65,23 @@ const list = [
 
 const extraSize = 8
 
+function NavigationPending() {
+	const { pending } = useLinkStatus()
+	if (!pending) return null
+	return (
+		<span role='status' data-nav-pending className='text-brand pointer-events-none absolute -right-1 -bottom-1 rounded-full bg-white p-0.5'>
+			<LoaderCircle size={12} className='animate-spin' aria-hidden='true' />
+			<span className='sr-only'>正在切换页面</span>
+		</span>
+	)
+}
+
 export default function NavCard() {
 	const pathname = usePathname()
 	const center = useCenterStore()
 	const [show, setShow] = useState(false)
 	const { maxSM } = useSize()
-	const [hoveredIndex, setHoveredIndex] = useState(() =>
-		Math.max(
-			0,
-			list.findIndex(item => pathname === item.href)
-		)
-	)
+	const [hoveredIndex, setHoveredIndex] = useState<number>()
 	const { siteContent, cardStyles } = useConfigStore()
 	const styles = cardStyles.navCard
 	const hiCardStyles = cardStyles.hiCard
@@ -85,6 +90,7 @@ export default function NavCard() {
 		const index = list.findIndex(item => pathname === item.href)
 		return index >= 0 ? index : undefined
 	}, [pathname])
+	const highlightedIndex = hoveredIndex ?? activeIndex ?? 0
 
 	useEffect(() => {
 		setShow(true)
@@ -120,27 +126,20 @@ export default function NavCard() {
 		else return { width: styles.width, height: styles.height }
 	}, [form, styles, compactWidth])
 
-	useEffect(() => {
-		if (form === 'icons' && activeIndex !== undefined && hoveredIndex !== activeIndex) {
-			const timer = setTimeout(() => {
-				setHoveredIndex(activeIndex)
-			}, 1500)
-			return () => clearTimeout(timer)
-		}
-	}, [hoveredIndex, activeIndex, form])
-
 	if (maxSM) position = { x: center.x - size.width / 2, y: 16 }
 
 	if (show)
 		return (
 			<HomeDraggableLayer cardKey='navCard' x={position.x} y={position.y} width={styles.width} height={styles.height}>
 				<Card
+					interactive={false}
+					animateEntrance={false}
 					order={styles.order}
 					width={size.width}
 					height={size.height}
 					x={position.x}
 					y={position.y}
-					className={clsx(form != 'full' && 'overflow-hidden', form === 'mini' && 'p-3', form === 'icons' && 'flex items-center p-3')}>
+					className={clsx('z-30', form != 'full' && 'overflow-hidden', form === 'mini' && 'p-3', form === 'icons' && 'flex items-center p-3')}>
 					{form === 'full' && siteContent.enableChristmas && (
 						<>
 							<img
@@ -152,10 +151,15 @@ export default function NavCard() {
 						</>
 					)}
 
-					<Link className='flex shrink-0 items-center gap-3' href='/' aria-label='返回首页' style={form === 'icons' ? { marginRight: iconGap } : undefined}>
+					<Link
+						className='relative flex shrink-0 items-center gap-3 [&_img]:pointer-events-none [&_span]:pointer-events-none'
+						href='/'
+						aria-label='返回首页'
+						style={form === 'icons' ? { marginRight: iconGap } : undefined}>
 						<Image src='/images/avatar.png' alt='avatar' width={40} height={40} style={{ boxShadow: ' 0 12px 20px -5px #E2D9CE' }} className='rounded-full' />
 						{form === 'full' && <span className='font-averia mt-1 text-2xl leading-none font-medium'>{siteContent.meta.title}</span>}
 						{form === 'full' && <span className='text-brand mt-2 text-xs font-medium'>(开发中)</span>}
+						<NavigationPending />
 					</Link>
 
 					{(form === 'full' || form === 'icons') && (
@@ -163,28 +167,23 @@ export default function NavCard() {
 							{form !== 'icons' && <div className='text-secondary mt-6 text-sm uppercase'>General</div>}
 
 							<div
+								onPointerLeave={() => setHoveredIndex(undefined)}
+								onBlur={event => {
+									if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHoveredIndex(undefined)
+								}}
 								className={cn('relative mt-2 space-y-2', form === 'icons' && 'mt-0 flex items-center space-y-0')}
 								style={form === 'icons' ? { gap: iconGap } : undefined}>
-								<motion.div
-									className='absolute max-w-[230px] rounded-full border'
-									layoutId='nav-hover'
-									initial={false}
-									animate={
-										form === 'icons'
-											? {
-													left: hoveredIndex * (itemHeight + iconGap) - extraSize,
-													top: -extraSize,
-													width: itemHeight + extraSize * 2,
-													height: itemHeight + extraSize * 2
-												}
-											: { top: hoveredIndex * (itemHeight + 8), left: 0, width: '100%', height: itemHeight }
-									}
-									transition={{
-										type: 'spring',
-										stiffness: 400,
-										damping: 30
+								<div
+									className='pointer-events-none absolute max-w-[230px] rounded-full border transition-transform duration-150 ease-out motion-reduce:transition-none'
+									style={{
+										left: form === 'icons' ? -extraSize : 0,
+										top: form === 'icons' ? -extraSize : 0,
+										width: form === 'icons' ? itemHeight + extraSize * 2 : '100%',
+										height: form === 'icons' ? itemHeight + extraSize * 2 : itemHeight,
+										transform:
+											form === 'icons' ? `translateX(${highlightedIndex * (itemHeight + iconGap)}px)` : `translateY(${highlightedIndex * (itemHeight + 8)}px)`,
+										backgroundImage: 'linear-gradient(to right bottom, var(--color-border) 60%, var(--color-card) 100%)'
 									}}
-									style={{ backgroundImage: 'linear-gradient(to right bottom, var(--color-border) 60%, var(--color-card) 100%)' }}
 								/>
 
 								{list.map((item, index) => (
@@ -195,12 +194,21 @@ export default function NavCard() {
 										title={item.label}
 										aria-current={pathname === item.href ? 'page' : undefined}
 										onFocus={() => setHoveredIndex(index)}
-										className={cn('text-secondary text-md relative z-10 flex items-center gap-3 rounded-full px-5 py-3', form === 'icons' && 'p-0')}
+										className={cn(
+											'text-secondary text-md relative z-10 flex items-center gap-3 rounded-full px-5 py-3 [&_svg]:pointer-events-none',
+											form === 'icons' && 'p-0'
+										)}
 										onMouseEnter={() => setHoveredIndex(index)}>
-										<div className='flex h-7 w-7 items-center justify-center'>
-											{hoveredIndex == index ? <item.iconActive className='text-brand absolute h-7 w-7' /> : <item.icon className='absolute h-7 w-7' />}
+										<div className='pointer-events-none flex h-7 w-7 items-center justify-center' aria-hidden='true'>
+											<item.iconActive
+												className={cn('text-brand absolute h-7 w-7 transition-opacity duration-100', highlightedIndex === index ? 'opacity-100' : 'opacity-0')}
+											/>
+											<item.icon className={cn('absolute h-7 w-7 transition-opacity duration-100', highlightedIndex === index ? 'opacity-0' : 'opacity-100')} />
 										</div>
-										{form !== 'icons' && <span className={clsx(index == hoveredIndex && 'text-primary font-medium')}>{item.label}</span>}
+										{form !== 'icons' && (
+											<span className={clsx('pointer-events-none', index === highlightedIndex && 'text-primary font-medium')}>{item.label}</span>
+										)}
+										<NavigationPending />
 									</Link>
 								))}
 							</div>

@@ -1,4 +1,4 @@
-import { marked } from 'marked'
+import { Marked, Renderer } from 'marked'
 import type { Tokens } from 'marked'
 
 export type TocItem = { id: string; text: string; level: number }
@@ -16,54 +16,37 @@ export function slugify(text: string): string {
 		.replace(/\s+/g, '-')
 }
 
-// Lazy load shiki to handle environments where it's not available (e.g., Cloudflare Workers)
-let shikiModule: typeof import('shiki') | null = null
-let shikiLoadAttempted = false
+let shikiPromise: Promise<typeof import('shiki') | null> | null = null
+let katexPromise: Promise<typeof import('katex') | null> | null = null
+const renderCache = new Map<string, MarkdownRenderResult>()
 
-async function loadShiki() {
-	if (shikiLoadAttempted) {
-		return shikiModule
-	}
-	shikiLoadAttempted = true
-
-	try {
-		shikiModule = await import('shiki')
-		return shikiModule
-	} catch (error) {
+function loadShiki() {
+	return (shikiPromise ??= import('shiki').catch(error => {
+		shikiPromise = null
 		console.warn('Failed to load shiki module:', error)
 		return null
-	}
+	}))
 }
 
-// Lazy load katex to handle environments where it's not available (e.g., Cloudflare Workers)
-let katexModule: typeof import('katex') | null = null
-let katexLoadAttempted = false
-
-async function loadKatex() {
-	if (katexModule) return katexModule
-	if (katexLoadAttempted) return null
-	katexLoadAttempted = true
-
-	try {
-		// katex is published as CJS; depending on bundler/runtime the dynamic import
-		// may return either the exports object directly or as `default`.
-		const mod: any = await import('katex')
-		katexModule = (mod?.default ?? mod) as any
-		return katexModule
-	} catch (error) {
-		console.warn('Failed to load katex module:', error)
-		return null
-	}
+function loadKatex() {
+	return (katexPromise ??= import('katex')
+		.then(mod => (mod.default ?? mod) as typeof import('katex'))
+		.catch(error => {
+			katexPromise = null
+			console.warn('Failed to load katex module:', error)
+			return null
+		}))
 }
 
-export async function renderMarkdown(markdown: string): Promise<MarkdownRenderResult> {
-	// Load optional renderers first so they apply on the FIRST lex/parse pass.
-	// (If we lex before registering extensions, math tokens won't ever be produced on a cold refresh.)
+async function renderDocument(markdown: string, signal?: AbortSignal) {
+	signal?.throwIfAborted()
+	// Each document owns its parser; route changes must not accumulate global extensions.
+	const parser = new Marked()
+	let katex: typeof import('katex') | null = null
 	const codeBlockMap = new Map<string, { html: string; original: string }>()
-	const [shiki, katex] = await Promise.all([loadShiki(), loadKatex()])
 
 	// Render HTML with heading ids
-	const renderer = new marked.Renderer()
+	const renderer = new Renderer()
 
 	renderer.heading = (token: Tokens.Heading) => {
 		const id = slugify(token.text || '')
@@ -82,10 +65,11 @@ export async function renderMarkdown(markdown: string): Promise<MarkdownRenderRe
 				return `<pre data-code="${escapedCode}">${codeData.html}</pre>`
 			}
 			// Fallback for failed highlighting
-			return `<pre data-code="${escapedCode}"><code>${codeData.original}</code></pre>`
+			const escapedText = codeData.original.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+			return `<pre data-code="${escapedCode}"><code>${escapedText}</code></pre>`
 		}
 		// Fallback to default (inline code, not code block)
-		return `<code>${token.text}</code>`
+		return `<code>${token.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`
 	}
 
 	renderer.listitem = (token: Tokens.ListItem) => {
@@ -94,7 +78,7 @@ export async function renderMarkdown(markdown: string): Promise<MarkdownRenderRe
 		let tokens = token.tokens
 
 		if (token.task) tokens = tokens.slice(1)
-		inner = marked.parser(tokens) as string
+		inner = parser.parser(tokens) as string
 
 		if (token.task) {
 			const checkbox = token.checked ? '<input type="checkbox" checked disabled />' : '<input type="checkbox" disabled />'
@@ -123,7 +107,7 @@ export async function renderMarkdown(markdown: string): Promise<MarkdownRenderRe
 	}
 
 	// Register extensions BEFORE lexing so math gets tokenized on cold refresh.
-	marked.use({
+	parser.use({
 		renderer,
 		extensions: [
 			// Block math: $$ ... $$
@@ -180,7 +164,16 @@ export async function renderMarkdown(markdown: string): Promise<MarkdownRenderRe
 	})
 
 	// Pre-process with marked lexer first (after extensions are registered)
-	const tokens = marked.lexer(markdown)
+	const tokens = parser.lexer(markdown)
+	const codeTokens: Tokens.Code[] = []
+	let hasMath = false
+	parser.walkTokens(tokens, token => {
+		if (token.type === 'code') codeTokens.push(token as Tokens.Code)
+		if (token.type === 'mathInline' || token.type === 'mathBlock') hasMath = true
+	})
+	const [shiki, mathRenderer] = await Promise.all([codeTokens.length ? loadShiki() : null, hasMath ? loadKatex() : null])
+	katex = mathRenderer
+	signal?.throwIfAborted()
 
 	// Extract TOC from parsed tokens (this correctly skips code blocks)
 	const toc: TocItem[] = []
@@ -201,7 +194,9 @@ export async function renderMarkdown(markdown: string): Promise<MarkdownRenderRe
 	extractHeadings(tokens)
 
 	// Pre-process code blocks with Shiki
-	for (const token of tokens) {
+	for (const [index, token] of codeTokens.entries()) {
+		if (index > 0 && index % 4 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0))
+		signal?.throwIfAborted()
 		if (token.type === 'code') {
 			const codeToken = token as Tokens.Code
 			const originalCode = codeToken.text
@@ -227,7 +222,21 @@ export async function renderMarkdown(markdown: string): Promise<MarkdownRenderRe
 			}
 		}
 	}
-	const html = (marked.parser(tokens) as string) || ''
+	signal?.throwIfAborted()
+	const html = (parser.parser(tokens) as string) || ''
 
-	return { html, toc }
+	return { html, toc, cacheable: (!codeTokens.length || Boolean(shiki)) && (!hasMath || Boolean(katex)) }
+}
+
+export async function renderMarkdown(markdown: string, signal?: AbortSignal): Promise<MarkdownRenderResult> {
+	signal?.throwIfAborted()
+	const cached = renderCache.get(markdown)
+	if (cached) return cached
+	const { html, toc, cacheable } = await renderDocument(markdown, signal)
+	const result = { html, toc }
+	if (cacheable && markdown.length <= 100000 && html.length <= 500000) {
+		if (renderCache.size >= 8) renderCache.delete(renderCache.keys().next().value!)
+		renderCache.set(markdown, result)
+	}
+	return result
 }

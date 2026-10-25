@@ -18,7 +18,6 @@ import { useAuthStore } from '@/hooks/use-auth'
 import { useConfigStore } from '@/app/(home)/stores/config-store'
 import { readFileAsText } from '@/lib/file-utils'
 import { cn } from '@/lib/utils'
-import { saveBlogEdits } from './services/save-blog-edits'
 import { Check } from 'lucide-react'
 import { BlogCoverHoverPreview, useBlogCoverHover } from './components/blog-cover-hover'
 import { CategoryModal } from './components/category-modal'
@@ -265,6 +264,7 @@ export default function BlogPage() {
 
 		try {
 			setSaving(true)
+			const { saveBlogEdits } = await import('./services/save-blog-edits')
 			await saveBlogEdits(items, editableItems, normalizedCategoryList)
 			setEditMode(false)
 			setSelectedSlugs(new Set())
