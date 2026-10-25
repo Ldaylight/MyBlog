@@ -1,18 +1,18 @@
 {
-	"updatedAt": "2026-10-25T03:40:04.000Z",
+	"updatedAt": "2026-10-25T06:06:16.000Z",
 	"events": [
 		{
-			"id": "prodclub-2114200291319124163-reset",
-			"title": "Codex 额度重置预告",
-			"summary": "参考站解析的重置预告。预计时间已换算为北京时间，最终生效与适用范围以原公告为准。",
+			"id": "prodclub-2114237083652882932-reset",
+			"title": "Codex 额度重置",
+			"summary": "参考站收录的额度重置公告；记录时间采用公告发布时间，适用范围以原帖为准。",
 			"kind": "reset",
-			"status": "scheduled",
-			"announcedAt": "2026-10-25T03:40:04.000Z",
-			"eventAt": "2026-10-25T07:00:00.000Z",
+			"status": "confirmed",
+			"announcedAt": "2026-10-25T06:06:16.000Z",
+			"eventAt": "2026-10-25T06:06:16.000Z",
 			"sourceName": "@thsottiaux · 经 ProdClub 整理",
-			"sourceUrl": "https://x.com/thsottiaux/status/2114200291319124163",
+			"sourceUrl": "https://x.com/thsottiaux/status/2114237083652882932",
 			"evidence": "source-record",
-			"timeBasis": "scheduled"
+			"timeBasis": "announcement"
 		},
 		{
 			"id": "prodclub-observed-2113492502355562875-reset",
@@ -875,7 +875,7 @@
 	],
 	"sync": {
 		"mode": "upstream",
-		"checkedAt": "2026-10-25T04:52:59.907Z",
+		"checkedAt": "2026-10-25T11:45:28.978Z",
 		"stale": false
 	}
 }
