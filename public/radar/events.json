@@ -1,6 +1,19 @@
 {
-	"updatedAt": "2026-10-25T06:06:16.000Z",
+	"updatedAt": "2026-10-26T05:21:22.000Z",
 	"events": [
+		{
+			"id": "prodclub-2114588174249071102-reset",
+			"title": "Codex 额度重置预告",
+			"summary": "参考站解析的重置预告。预计时间已换算为北京时间，最终生效与适用范围以原公告为准。",
+			"kind": "reset",
+			"status": "scheduled",
+			"announcedAt": "2026-10-26T05:21:22.000Z",
+			"eventAt": "2026-10-26T07:00:00.000Z",
+			"sourceName": "@thsottiaux · 经 ProdClub 整理",
+			"sourceUrl": "https://x.com/thsottiaux/status/2114588174249071102",
+			"evidence": "source-record",
+			"timeBasis": "scheduled"
+		},
 		{
 			"id": "prodclub-2114237083652882932-reset",
 			"title": "Codex 额度重置",
@@ -875,7 +888,7 @@
 	],
 	"sync": {
 		"mode": "upstream",
-		"checkedAt": "2026-10-25T11:45:28.978Z",
+		"checkedAt": "2026-10-26T06:25:12.061Z",
 		"stale": false
 	}
 }
