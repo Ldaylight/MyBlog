@@ -1,6 +1,19 @@
 {
-	"updatedAt": "2026-11-01T00:43:20.000Z",
+	"updatedAt": "2026-11-01T23:27:20.000Z",
 	"events": [
+		{
+			"id": "prodclub-2117035794678546764-banked",
+			"title": "Codex 重置卡发放",
+			"summary": "参考站收录的重置卡发放公告；记录时间采用公告发布时间，适用范围以原帖为准。",
+			"kind": "banked",
+			"status": "confirmed",
+			"announcedAt": "2026-11-01T23:27:20.000Z",
+			"eventAt": "2026-11-01T23:27:20.000Z",
+			"sourceName": "@thsottiaux · 经 ProdClub 整理",
+			"sourceUrl": "https://x.com/thsottiaux/status/2117035794678546764",
+			"evidence": "source-record",
+			"timeBasis": "announcement"
+		},
 		{
 			"id": "prodclub-2116692529970311254-banked",
 			"title": "Codex 重置卡发放",
@@ -914,7 +927,7 @@
 	],
 	"sync": {
 		"mode": "upstream",
-		"checkedAt": "2026-11-01T02:19:08.855Z",
+		"checkedAt": "2026-11-01T23:54:51.042Z",
 		"stale": false
 	}
 }
